@@ -2,6 +2,17 @@
 .env
 backend/google_credentials.json
 
+# OS
+.DS_Store
+**/.DS_Store
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Бэкапы
+backups/
+
 # Python
 __pycache__/
 *.py[cod]

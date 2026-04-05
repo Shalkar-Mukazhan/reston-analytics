@@ -433,6 +433,7 @@ def sync_all_iiko_analytics_task(self):
     за текущий месяц. Запускается автоматически через Celery Beat в 03:00 Алматы.
     """
     from datetime import date as _date
+    from app.services.telegram import alert_ok, alert_error
     db = SessionLocal()
     try:
         from app.models.restaurant import Restaurant
@@ -443,7 +444,14 @@ def sync_all_iiko_analytics_task(self):
         for r in restaurants:
             task = sync_iiko_analytics_task.delay(r.id, year)
             started.append({"restaurant_id": r.id, "task_id": task.id})
+        alert_ok(
+            "Ночной синк аналитики запущен",
+            f"Ресторанов: {len(started)} | {now.strftime('%d.%m.%Y')} 03:00"
+        )
         return {"year": year, "started": len(started), "tasks": started}
+    except Exception as e:
+        alert_error("Ночной синк аналитики: ошибка", str(e))
+        raise
     finally:
         db.close()
 

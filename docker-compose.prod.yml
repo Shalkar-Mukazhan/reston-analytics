@@ -73,6 +73,25 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
 
+  db-backup:
+    image: prodrigestivill/postgres-backup-local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - SCHEDULE=@daily
+      - BACKUP_KEEP_DAYS=7
+      - BACKUP_KEEP_WEEKS=4
+      - BACKUP_KEEP_MONTHS=6
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   nginx:
     image: nginx:alpine
     restart: unless-stopped

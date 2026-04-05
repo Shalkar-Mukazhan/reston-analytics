@@ -577,6 +577,7 @@ def sync_checklist_hourly():
     business_date = (now_almaty - timedelta(hours=7)).date() if now_almaty.hour < 7 \
                     else now_almaty.date()
 
+    from app.services.telegram import alert_error
     log.info("=== checklist hourly | %s Almaty | biz_date=%s ===",
              now_almaty.strftime("%H:%M"), business_date)
 
@@ -604,6 +605,7 @@ def sync_checklist_hourly():
                                  business_date=business_date)
             except Exception as e:
                 log.error("Ошибка синхронизации %s: %s", restaurant.name, e)
+                alert_error(f"Чек-лист: ошибка синхронизации {restaurant.name}", str(e))
     finally:
         db.close()
 
@@ -622,6 +624,7 @@ def start_day_sync_task(restaurant_id: int):
     now_almaty = datetime.now(ALMATY_TZ)
     business_date = now_almaty.date()
 
+    from app.services.telegram import alert_error, alert_ok
     log.info("=== start-day sync | restaurant_id=%d | %s Almaty ===",
              restaurant_id, now_almaty.strftime("%H:%M"))
 
@@ -642,6 +645,11 @@ def start_day_sync_task(restaurant_id: int):
 
         _sync_restaurant(db, restaurant, sheet_id, is_morning=True,
                          business_date=business_date)
+        alert_ok(f"Чек-лист: новый день начат — {restaurant.name}",
+                 f"Дата: {business_date}, план и история загружены в Google Sheets")
+    except Exception as e:
+        log.error("Ошибка start-day %s: %s", restaurant_id, e)
+        alert_error(f"Чек-лист: ошибка начала дня (ресторан #{restaurant_id})", str(e))
     finally:
         db.close()
 

@@ -1,10 +1,24 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, reports, writeoff, analytics, admin, invoices, dashboard, recipes, planning, checklist
 
+# Sentry — мониторинг ошибок (включается если задан SENTRY_DSN)
+_sentry_dsn = os.environ.get("SENTRY_DSN", "")
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        traces_sample_rate=0.1,
+        environment=os.environ.get("APP_ENV", "production"),
+    )
+
 app = FastAPI(
-    title="WasteControl API",
-    description="Система контроля списаний для ресторанной сети I'M",
+    title="Reston Analytics API",
+    description="Система аналитики и контроля ресторанов I'M",
     version="2.0.0",
 )
 
