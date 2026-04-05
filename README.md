@@ -751,10 +751,49 @@ db.close()
 
 ---
 
+## 17. Что осталось сделать (чеклист перед запуском)
+
+### Твои шаги — по порядку
+
+- [ ] **1. Купить сервер** — 2 CPU / 4 GB RAM / 40 GB SSD (ps.kz, Hetzner, DigitalOcean)
+- [ ] **2. Создать Telegram бота** — @BotFather → `/newbot` → получить токен + Chat ID через @userinfobot
+- [ ] **3. Скопировать секреты на сервер вручную:**
+  - `.env` (создать по шаблону `.env.example`, заполнить пароли)
+  - `backend/google_credentials.json` (лежит локально: `/Users/shalkar/Desktop/wastecontrol-web/backend/google_credentials.json`)
+- [ ] **4. Задеплоить:**
+  ```bash
+  git clone https://github.com/Shalkar-Mukazhan/reston-analytics.git
+  cd reston-analytics
+  docker compose -f docker-compose.prod.yml up -d --build
+  ```
+- [ ] **5. Перенести БД с локалки** (`pg_dump` → `scp` → `psql`) или применить миграции с нуля (`alembic upgrade head`)
+- [ ] **6. Купить домен** + настроить SSL через Certbot (бесплатно)
+- [ ] **7. Создать Google Sheets для каждого ресторана:**
+  - Создать таблицу (можно в своём аккаунте)
+  - Поделиться с `sheets-bot@shalkar-project.iam.gserviceaccount.com` как редактором
+  - Вставить URL в Админ → Рестораны → поле "Чек-лист Google Sheets URL"
+
+### Как вносить изменения в код
+
+**Правильный подход:**
+```
+Mac (локально) → claude.ai/code → пишешь/меняешь код
+       ↓
+   git push
+       ↓
+  Сервер: git pull + docker compose up -d --build
+```
+
+Claude Code устанавливается на **Mac**, не на сервер. Сервер только запускает код.
+
+---
+
 ## Контакты и поддержка
 
 - GitHub: https://github.com/Shalkar-Mukazhan/reston-analytics
 - Google сервисный аккаунт: `sheets-bot@shalkar-project.iam.gserviceaccount.com`
+- Локальный проект: `/Users/shalkar/Desktop/wastecontrol-web/`
+- Локальный .env: `/Users/shalkar/Desktop/wastecontrol-web/.env`
 
 ---
 
