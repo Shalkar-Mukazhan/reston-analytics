@@ -1,0 +1,28 @@
+# Секреты — никогда не в git!
+.env
+backend/google_credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# Отчёты и данные
+backend/reports/
+*.xlsx
+*.xls
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docker
+*.log
