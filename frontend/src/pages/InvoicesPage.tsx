@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import api from "../api/client"
 import type { Restaurant } from "../types"
-import { useAuth } from "../hooks/useAuth"
 import {
   FileInput, Upload, ChevronRight, X, Loader2, AlertCircle,
   PackageCheck, RefreshCw, Building2, Send, CheckCircle2,
@@ -234,7 +233,6 @@ function PostToIikoModal({ invoice, restaurantName, onClose, onDone }: {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function InvoicesPage() {
-  const { user } = useAuth()
   const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [restaurantId, setRestaurantId] = useState("")

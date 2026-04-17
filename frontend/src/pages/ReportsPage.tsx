@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react"
 import api from "../api/client"
 import type { Restaurant, Report } from "../types"
-import { useAuth } from "../hooks/useAuth"
 import {
   FileText, Download, RefreshCw, Play, ChevronRight,
   Loader2, AlertCircle, CheckCircle2, Clock, X, Send,
 } from "lucide-react"
-import { cn, formatDate } from "../lib/utils"
+import { cn } from "../lib/utils"
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -255,7 +254,6 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
-  const { user } = useAuth()
   const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [reports, setReports] = useState<ReportWithRestaurant[]>([])
   const [restaurantId, setRestaurantId] = useState("")
