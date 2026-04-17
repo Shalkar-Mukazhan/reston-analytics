@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -175,33 +176,27 @@ function MonthTable({ months }: { months: MonthPoint[] }) {
 export default function AnalyticsPage() {
   const { user } = useAuth()
   const isCoOrAdmin = user?.role === "co" || user?.role === "admin"
+  const queryClient = useQueryClient()
 
-  const [data, setData] = useState<YearlyData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [year, setYear] = useState(new Date().getFullYear())
   const [restaurantId, setRestaurantId] = useState<number | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
-  useEffect(() => {
-    if (isCoOrAdmin) {
-      api.get("/analytics/restaurants").then(res => setRestaurants(res.data))
-    }
-  }, [isCoOrAdmin])
+  const { data: restaurants = [] } = useQuery<Restaurant[]>({
+    queryKey: ["analytics-restaurants"],
+    queryFn: () => api.get("/analytics/restaurants").then(r => r.data),
+    enabled: isCoOrAdmin,
+  })
 
-  const load = async (y: number, rid: number | null) => {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ year: String(y) })
-      if (rid) params.set("restaurant_id", String(rid))
-
-      const yearRes = await api.get(`/analytics/yearly?${params}`)
-      setData(yearRes.data)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data, isLoading: loading } = useQuery<YearlyData>({
+    queryKey: ["analytics-yearly", year, restaurantId],
+    queryFn: () => {
+      const params = new URLSearchParams({ year: String(year) })
+      if (restaurantId) params.set("restaurant_id", String(restaurantId))
+      return api.get(`/analytics/yearly?${params}`).then(r => r.data)
+    },
+  })
 
   const syncFromIiko = async () => {
     if (!restaurantId) {
@@ -229,7 +224,7 @@ export default function AnalyticsPage() {
               const synced = res.synced ?? 0
               const errors = res.errors?.length ?? 0
               setSyncMsg({ type: "success", text: `Синхронизировано ${synced} месяцев${errors > 0 ? ` (ошибок: ${errors})` : ""}` })
-              await load(year, restaurantId)
+              await queryClient.invalidateQueries({ queryKey: ["analytics-yearly"] })
             } else if (st.status === "failure" || attempts >= maxAttempts) {
               clearInterval(poll)
               setSyncing(false)
@@ -243,8 +238,6 @@ export default function AnalyticsPage() {
       setSyncing(false)
     }
   }
-
-  useEffect(() => { load(year, restaurantId) }, [year, restaurantId])
 
   const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i)
   const chartMonths = data?.months ?? []
