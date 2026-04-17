@@ -7,6 +7,8 @@ import {
   RefreshCw, Wifi, WifiOff, BookOpen, CreditCard,
   Layers, Tag, Database, Search, ChefHat, Trash, ArrowLeftRight, FileSpreadsheet,
   ShieldCheck, ToggleLeft, ToggleRight, FileInput, TrendingUp,
+  BarChart2, TableProperties, FileText,
+  History, RotateCcw,
 } from "lucide-react"
 import { cn } from "../lib/utils"
 
@@ -1544,6 +1546,17 @@ interface CatalogSearchResult {
   product_iiko_id: string
 }
 
+interface ChangeLogEntry {
+  id: number
+  operation_type: string
+  performed_at: string
+  performed_by: string | null
+  effective_date: string
+  description: string | null
+  is_rolled_back: boolean
+  dishes_count: number
+}
+
 function RecipesTab() {
   const [stats, setStats] = useState<RecipeStats | null>(null)
   const [search, setSearch] = useState("")
@@ -1555,6 +1568,14 @@ function RecipesTab() {
   const [replacing, setReplacing] = useState(false)
   const [effectiveDate, setEffectiveDate] = useState(todayIso())
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null)
+
+  // История изменений
+  const [changelog, setChangelog] = useState<ChangeLogEntry[] | null>(null)
+  const [changelogLoading, setChangelogLoading] = useState(false)
+  const [rollbackModal, setRollbackModal] = useState<ChangeLogEntry | null>(null)
+  const [rollbackDate, setRollbackDate] = useState(todayIso())
+  const [rollbackLoading, setRollbackLoading] = useState(false)
+  const [rollbackResult, setRollbackResult] = useState<any>(null)
 
   // Импорт Excel
   const [importFile, setImportFile] = useState<File | null>(null)
@@ -1583,6 +1604,36 @@ function RecipesTab() {
   }
 
   useEffect(() => { loadStats() }, [])
+
+  const loadChangelog = async () => {
+    setChangelogLoading(true)
+    try {
+      const { data } = await api.get(`/recipes/change-log?restaurant_id=${FSKZ_ID}&limit=50`)
+      setChangelog(data)
+    } catch (e: any) {
+      setChangelog([])
+    } finally { setChangelogLoading(false) }
+  }
+
+  const handleRollback = async () => {
+    if (!rollbackModal) return
+    setRollbackLoading(true); setRollbackResult(null)
+    try {
+      const { data } = await api.post(`/recipes/rollback/${rollbackModal.id}`, { rollback_date: rollbackDate })
+      setRollbackResult(data)
+      // Обновляем лог — помечаем запись как откаченную
+      setChangelog(prev => prev ? prev.map(e => e.id === rollbackModal.id ? { ...e, is_rolled_back: true } : e) : prev)
+    } catch (e: any) {
+      setRollbackResult({ error: e.response?.data?.detail || e.message })
+    } finally { setRollbackLoading(false) }
+  }
+
+  const opLabel: Record<string, string> = {
+    bulk_remove: "Удаление ингредиента",
+    bulk_replace: "Замена ингредиента",
+    bulk_update_amount: "Изменение количества",
+    import_excel: "Импорт Excel",
+  }
 
   const handleSync = async () => {
     setSyncing(true); setMsg(null)
@@ -2048,6 +2099,139 @@ function RecipesTab() {
           </div>
         </div>
       )}
+
+      {/* История изменений / Откат */}
+      <div className="card p-5 mt-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-brand-dark flex items-center gap-2">
+            <History size={15} className="text-brand-yellow" /> История изменений рецептур
+          </h3>
+          <button className="btn-secondary text-sm" onClick={loadChangelog} disabled={changelogLoading}>
+            {changelogLoading ? <><Loader2 size={13} className="animate-spin" />Загрузка...</> : <><RefreshCw size={13} />Загрузить историю</>}
+          </button>
+        </div>
+        <p className="text-sm text-brand-muted mb-3">
+          Каждое массовое изменение сохраняется. Можно откатить на любую дату — IIKO создаст новую версию техкарт со старыми ингредиентами.
+        </p>
+
+        {changelog === null && (
+          <p className="text-sm text-brand-muted italic">Нажмите «Загрузить историю» чтобы увидеть изменения.</p>
+        )}
+
+        {changelog !== null && changelog.length === 0 && (
+          <p className="text-sm text-brand-muted italic">Изменений пока нет.</p>
+        )}
+
+        {changelog !== null && changelog.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-brand-border">
+                  <th className="py-2 px-3 text-left text-xs text-brand-muted font-medium">Дата</th>
+                  <th className="py-2 px-3 text-left text-xs text-brand-muted font-medium">Операция</th>
+                  <th className="py-2 px-3 text-left text-xs text-brand-muted font-medium">Описание</th>
+                  <th className="py-2 px-3 text-left text-xs text-brand-muted font-medium">Блюд</th>
+                  <th className="py-2 px-3 text-left text-xs text-brand-muted font-medium">Кто</th>
+                  <th className="py-2 px-3 text-left text-xs text-brand-muted font-medium">Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                {changelog.map((entry) => (
+                  <tr key={entry.id} className={`border-b border-brand-border/50 ${entry.is_rolled_back ? "opacity-50" : ""}`}>
+                    <td className="py-2 px-3 text-xs text-brand-muted whitespace-nowrap">
+                      {new Date(entry.performed_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </td>
+                    <td className="py-2 px-3">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-brand-yellow/10 text-brand-dark font-medium">
+                        {opLabel[entry.operation_type] ?? entry.operation_type}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-xs text-brand-dark">{entry.description ?? "—"}</td>
+                    <td className="py-2 px-3 text-xs text-center font-mono">{entry.dishes_count}</td>
+                    <td className="py-2 px-3 text-xs text-brand-muted">{entry.performed_by ?? "—"}</td>
+                    <td className="py-2 px-3">
+                      {entry.is_rolled_back ? (
+                        <span className="text-xs text-brand-muted italic">Откачено</span>
+                      ) : (
+                        <button
+                          className="text-xs px-3 py-1 rounded border border-brand-yellow text-brand-dark hover:bg-brand-yellow/10 transition-colors"
+                          onClick={() => { setRollbackModal(entry); setRollbackDate(entry.effective_date); setRollbackResult(null) }}
+                        >
+                          Откатить
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Модал отката */}
+      {rollbackModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+            <h3 className="font-semibold text-brand-dark text-lg mb-1 flex items-center gap-2">
+              <RotateCcw size={16} className="text-brand-yellow" /> Откат рецептуры
+            </h3>
+            <p className="text-sm text-brand-muted mb-4">
+              Восстановит старые рецептуры для <span className="font-semibold text-brand-dark">{rollbackModal.dishes_count} блюд</span>.
+              В IIKO будут созданы новые версии техкарт начиная с выбранной даты.
+            </p>
+
+            <div className="bg-brand-bg rounded-lg p-3 mb-4 text-sm">
+              <div className="text-brand-muted text-xs mb-1">Откатываем изменение:</div>
+              <div className="font-medium text-brand-dark">{rollbackModal.description}</div>
+              <div className="text-xs text-brand-muted mt-1">
+                Изменено {new Date(rollbackModal.performed_at).toLocaleString("ru-RU")} · действовало с {rollbackModal.effective_date}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-xs text-brand-muted mb-1">Дата вступления в силу отката:</label>
+              <input
+                type="date"
+                className="input w-full"
+                value={rollbackDate}
+                onChange={(e) => setRollbackDate(e.target.value)}
+              />
+              <p className="text-xs text-brand-muted mt-1">
+                IIKO закроет текущую версию и откроет старую с этой даты.
+              </p>
+            </div>
+
+            {rollbackResult && (
+              <div className="mb-4">
+                {rollbackResult.error ? (
+                  <Alert type="error" message={rollbackResult.error} />
+                ) : (
+                  <Alert
+                    type={rollbackResult.failed === 0 ? "success" : "error"}
+                    message={`Откат выполнен: ${rollbackResult.ok} блюд · ошибок: ${rollbackResult.failed} · дата: ${rollbackResult.rollback_date}`}
+                  />
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-end">
+              <button className="btn-secondary" onClick={() => { setRollbackModal(null); setRollbackResult(null) }}>
+                {rollbackResult ? "Закрыть" : "Отмена"}
+              </button>
+              {!rollbackResult && (
+                <button
+                  className="btn-primary"
+                  onClick={handleRollback}
+                  disabled={rollbackLoading}
+                >
+                  {rollbackLoading ? <><Loader2 size={14} className="animate-spin" />Откат...</> : <><RotateCcw size={14} />Выполнить откат</>}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -2056,12 +2240,17 @@ function RecipesTab() {
 
 // ── Tab: Access (feature flags per restaurant) ────────────────────────────────
 
+type FeatKey = "feat_invoices" | "feat_analytics" | "feat_reports" | "feat_planning" | "feat_checklist"
+
 interface AccessRestaurant {
   id: number
   name: string
   code: string
-  feat_invoices: boolean
+  feat_invoices:  boolean
   feat_analytics: boolean
+  feat_reports:   boolean
+  feat_planning:  boolean
+  feat_checklist: boolean
 }
 
 function AccessTab() {
@@ -2075,11 +2264,14 @@ function AccessTab() {
         id: x.id, name: x.name, code: x.code,
         feat_invoices:  x.feat_invoices  !== false,
         feat_analytics: x.feat_analytics !== false,
+        feat_reports:   x.feat_reports   !== false,
+        feat_planning:  x.feat_planning  !== false,
+        feat_checklist: x.feat_checklist !== false,
       }))))
       .finally(() => setLoading(false))
   }, [])
 
-  const toggle = async (id: number, field: "feat_invoices" | "feat_analytics") => {
+  const toggle = async (id: number, field: FeatKey) => {
     const rest = restaurants.find(r => r.id === id)
     if (!rest) return
     const newVal = !rest[field]
@@ -2094,9 +2286,12 @@ function AccessTab() {
     }
   }
 
-  const FEATURES: { key: "feat_invoices" | "feat_analytics"; label: string; icon: React.ReactNode; desc: string }[] = [
-    { key: "feat_invoices",  label: "Накладные",  icon: <FileInput size={15} />,  desc: "Раздел приёма накладных ABL" },
-    { key: "feat_analytics", label: "Аналитика",  icon: <TrendingUp size={15} />, desc: "Раздел аналитики и трендов" },
+  const FEATURES: { key: FeatKey; label: string; icon: React.ReactNode; desc: string }[] = [
+    { key: "feat_reports",   label: "Отчёты",       icon: <FileText size={15} />,       desc: "Генерация и просмотр отчётов" },
+    { key: "feat_invoices",  label: "Накладные",    icon: <FileInput size={15} />,      desc: "Приём накладных ABL" },
+    { key: "feat_analytics", label: "Аналитика",    icon: <TrendingUp size={15} />,     desc: "Аналитика и тренды" },
+    { key: "feat_planning",  label: "Планирование", icon: <BarChart2 size={15} />,      desc: "Планирование продаж" },
+    { key: "feat_checklist", label: "Чек-лист",     icon: <TableProperties size={15} />, desc: "Чек-лист менеджера смены" },
   ]
 
   if (loading) return <div className="flex justify-center py-20"><Loader2 size={22} className="animate-spin text-brand-muted" /></div>

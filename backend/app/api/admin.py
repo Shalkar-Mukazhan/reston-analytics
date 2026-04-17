@@ -181,8 +181,11 @@ def _restaurant_dict(r: Restaurant) -> dict:
         "iiko_login": r.iiko_login,
         "store_id": r.store_id,
         "is_active": r.is_active,
-        "feat_invoices": r.feat_invoices if r.feat_invoices is not None else True,
+        "feat_invoices":  r.feat_invoices  if r.feat_invoices  is not None else True,
         "feat_analytics": r.feat_analytics if r.feat_analytics is not None else True,
+        "feat_reports":   r.feat_reports   if r.feat_reports   is not None else True,
+        "feat_planning":  r.feat_planning  if r.feat_planning  is not None else True,
+        "feat_checklist": r.feat_checklist if r.feat_checklist is not None else True,
         "google_sheet_url": r.google_sheet_url,
         "checklist_start_hour": r.checklist_start_hour if r.checklist_start_hour is not None else 7,
         "presets": [
@@ -275,8 +278,11 @@ def update_restaurant(
 
 
 class UpdateFeaturesRequest(BaseModel):
-    feat_invoices: Optional[bool] = None
+    feat_invoices:  Optional[bool] = None
     feat_analytics: Optional[bool] = None
+    feat_reports:   Optional[bool] = None
+    feat_planning:  Optional[bool] = None
+    feat_checklist: Optional[bool] = None
 
 
 @router.patch("/restaurants/{restaurant_id}/features")
@@ -290,16 +296,20 @@ def update_restaurant_features(
     restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
     if not restaurant:
         raise HTTPException(status_code=404, detail="Ресторан не найден")
-    if body.feat_invoices is not None:
-        restaurant.feat_invoices = body.feat_invoices
-    if body.feat_analytics is not None:
-        restaurant.feat_analytics = body.feat_analytics
+    if body.feat_invoices  is not None: restaurant.feat_invoices  = body.feat_invoices
+    if body.feat_analytics is not None: restaurant.feat_analytics = body.feat_analytics
+    if body.feat_reports   is not None: restaurant.feat_reports   = body.feat_reports
+    if body.feat_planning  is not None: restaurant.feat_planning  = body.feat_planning
+    if body.feat_checklist is not None: restaurant.feat_checklist = body.feat_checklist
     db.commit()
     return {
-        "id": restaurant.id,
-        "name": restaurant.name,
-        "feat_invoices": restaurant.feat_invoices,
+        "id":            restaurant.id,
+        "name":          restaurant.name,
+        "feat_invoices":  restaurant.feat_invoices,
         "feat_analytics": restaurant.feat_analytics,
+        "feat_reports":   restaurant.feat_reports,
+        "feat_planning":  restaurant.feat_planning,
+        "feat_checklist": restaurant.feat_checklist,
     }
 
 

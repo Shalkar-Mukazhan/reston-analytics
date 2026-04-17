@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.catalog import ProductCatalog
-from app.models.recipe import AssemblyChart, ChartIngredient, Dish
+from app.models.recipe import AssemblyChart, ChartIngredient, Dish, RecipeChangeLog
 from app.models.restaurant import Restaurant
 from app.services import iiko as iiko_svc
 
@@ -521,6 +521,45 @@ def get_chart(
     }
 
 
+def _snapshot_chart(chart: AssemblyChart) -> dict:
+    """Снапшот техкарты (блюдо + ингредиенты) для лога отката."""
+    return {
+        "chart_id": chart.id,
+        "iiko_uuid": chart.iiko_uuid,
+        "dish_id": chart.dish_id,
+        "dish_name": chart.dish.name if chart.dish else None,
+        "date_from": chart.date_from.isoformat() if chart.date_from else None,
+        "date_to": chart.date_to.isoformat() if chart.date_to else None,
+        "assembled_amount": chart.assembled_amount,
+        "writeoff_strategy": chart.writeoff_strategy,
+        "size_assembly_strategy": chart.size_assembly_strategy,
+        "direct_writeoff_departments": chart.direct_writeoff_departments,
+        "direct_writeoff_inverse": chart.direct_writeoff_inverse,
+        "ingredients": [
+            {
+                "ingredient_iiko_uuid": ing.ingredient_iiko_uuid,
+                "ingredient_name": ing.ingredient_name,
+                "sort_weight": ing.sort_weight,
+                "amount_in": ing.amount_in,
+                "amount_middle": ing.amount_middle,
+                "amount_out": ing.amount_out,
+                "amount_in1": ing.amount_in1,
+                "amount_out1": ing.amount_out1,
+                "amount_in2": ing.amount_in2,
+                "amount_out2": ing.amount_out2,
+                "amount_in3": ing.amount_in3,
+                "amount_out3": ing.amount_out3,
+                "package_count": ing.package_count,
+                "package_type_id": ing.package_type_id,
+                "product_size_spec_id": ing.product_size_spec_id,
+                "store_departments": ing.store_departments,
+                "store_inverse": ing.store_inverse,
+            }
+            for ing in sorted(chart.ingredients, key=lambda x: x.sort_weight)
+        ],
+    }
+
+
 def _run_bulk_op(
     db: Session,
     restaurant,
@@ -528,6 +567,9 @@ def _run_bulk_op(
     restaurant_id: int,
     effective_date: str,
     modify_fn,  # callable(ingredients: list[ChartIngredient]) -> list[ChartIngredient] | None
+    operation_type: str = "bulk_op",
+    description: str = "",
+    performed_by: str = "",
 ) -> list[dict]:
     """
     Общий runner для всех bulk-операций:
@@ -536,10 +578,13 @@ def _run_bulk_op(
     3. Создаёт НОВУЮ техкарту в IIKO (без id, с dateFrom=effective_date)
     4. IIKO автоматически закрывает старую (ставит ей dateTo)
     5. Пересинхронизирует блюдо из IIKO чтобы наша БД была актуальной
+    6. Сохраняет снапшот в RecipeChangeLog для возможного отката
     """
     import time
+    from datetime import date as date_type
     name_map = _get_name_map(db)
     results = []
+    snapshots = []  # снапшоты для лога
 
     for chart_id in chart_ids:
         chart = (
@@ -567,6 +612,9 @@ def _run_bulk_op(
                             "dish_name": chart.dish.name, "note": "ингредиент не найден в этой карте"})
             continue
 
+        # Снапшот ДО изменения (для отката)
+        snap = _snapshot_chart(chart)
+
         try:
             # Строим payload для СОЗДАНИЯ новой техкарты (без id!)
             payload = _build_new_chart_payload(chart, modified, effective_date)
@@ -576,6 +624,7 @@ def _run_bulk_op(
             _resync_dish(db, restaurant, chart.dish, name_map)
             db.flush()
 
+            snapshots.append(snap)
             results.append({
                 "chart_id": chart_id,
                 "ok": True,
@@ -588,6 +637,23 @@ def _run_bulk_op(
 
         # Пауза между запросами чтобы не перегружать IIKO сервер
         time.sleep(0.3)
+
+    # Сохраняем лог если были успешные изменения
+    if snapshots:
+        try:
+            eff_date = date_type.fromisoformat(effective_date)
+        except Exception:
+            eff_date = date_type.today()
+        log_entry = RecipeChangeLog(
+            restaurant_id=restaurant_id,
+            operation_type=operation_type,
+            performed_by=performed_by,
+            effective_date=eff_date,
+            description=description,
+            snapshot=json.dumps(snapshots, ensure_ascii=False),
+            is_rolled_back=False,
+        )
+        db.add(log_entry)
 
     db.commit()
     return results
@@ -619,7 +685,22 @@ def bulk_remove_ingredient(
             return None  # не нашли ингредиент
         return filtered
 
-    results = _run_bulk_op(db, restaurant, body.chart_ids, body.restaurant_id, effective_date, remove_ingredient)
+    # Ищем имя ингредиента для описания в логе
+    sample_chart = db.query(AssemblyChart).filter(
+        AssemblyChart.id.in_(body.chart_ids)
+    ).first()
+    ing_name = next(
+        (i.ingredient_name for i in (sample_chart.ingredients if sample_chart else [])
+         if i.ingredient_iiko_uuid == iiko_uuid_lower),
+        body.ingredient_iiko_uuid,
+    )
+
+    results = _run_bulk_op(
+        db, restaurant, body.chart_ids, body.restaurant_id, effective_date, remove_ingredient,
+        operation_type="bulk_remove",
+        description=f"Удалён ингредиент: {ing_name}",
+        performed_by=current_user.username,
+    )
     ok_count = sum(1 for r in results if r.get("ok") and not r.get("skipped"))
     return {"total": len(body.chart_ids), "ok": ok_count,
             "failed": sum(1 for r in results if not r.get("ok")),
@@ -666,7 +747,19 @@ def bulk_replace_ingredient(
                 result.append(ing)
         return result if found else None
 
-    results = _run_bulk_op(db, restaurant, body.chart_ids, body.restaurant_id, effective_date, replace_ingredient)
+    old_name = next(
+        (i.ingredient_name for chart in db.query(AssemblyChart).filter(AssemblyChart.id.in_(body.chart_ids)).all()
+         for i in chart.ingredients if i.ingredient_iiko_uuid == old_uuid),
+        old_uuid,
+    )
+    new_name = body.new_ingredient_name or new_uuid
+
+    results = _run_bulk_op(
+        db, restaurant, body.chart_ids, body.restaurant_id, effective_date, replace_ingredient,
+        operation_type="bulk_replace",
+        description=f"Замена: {old_name} → {new_name} ({body.new_amount_in})",
+        performed_by=current_user.username,
+    )
     ok_count = sum(1 for r in results if r.get("ok") and not r.get("skipped"))
     return {"total": len(body.chart_ids), "ok": ok_count,
             "failed": sum(1 for r in results if not r.get("ok")),
@@ -708,7 +801,19 @@ def bulk_update_ingredient_amount(
                 result.append(ing)
         return result if found else None
 
-    results = _run_bulk_op(db, restaurant, body.chart_ids, body.restaurant_id, effective_date, update_amount)
+    sample = db.query(AssemblyChart).filter(AssemblyChart.id.in_(body.chart_ids)).first()
+    ing_name = next(
+        (i.ingredient_name for i in (sample.ingredients if sample else [])
+         if i.ingredient_iiko_uuid == iiko_uuid_lower),
+        iiko_uuid_lower,
+    )
+
+    results = _run_bulk_op(
+        db, restaurant, body.chart_ids, body.restaurant_id, effective_date, update_amount,
+        operation_type="bulk_update_amount",
+        description=f"Изменено количество: {ing_name} → {body.new_amount_in}",
+        performed_by=current_user.username,
+    )
     ok_count = sum(1 for r in results if r.get("ok") and not r.get("skipped"))
     return {"total": len(body.chart_ids), "ok": ok_count,
             "failed": sum(1 for r in results if not r.get("ok")),
@@ -1030,5 +1135,166 @@ def import_recipes_from_excel(
         "failed": failed_count,
         "parse_errors": parse_errors,
         "effective_date": eff_date,
+        "results": results,
+    }
+
+
+# ─── История изменений + Откат ─────────────────────────────────────────────────
+
+@router.get("/change-log")
+def get_change_log(
+    restaurant_id: int,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Список bulk-изменений техкарт (для отображения истории и отката).
+    Возвращает последние `limit` записей, отсортированных от новых к старым.
+    """
+    if current_user.role not in ("admin", "co"):
+        raise HTTPException(403, "Нет доступа")
+
+    logs = (
+        db.query(RecipeChangeLog)
+        .filter(RecipeChangeLog.restaurant_id == restaurant_id)
+        .order_by(RecipeChangeLog.performed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": log.id,
+            "operation_type": log.operation_type,
+            "performed_at": log.performed_at.isoformat(),
+            "performed_by": log.performed_by,
+            "effective_date": log.effective_date.isoformat(),
+            "description": log.description,
+            "is_rolled_back": log.is_rolled_back,
+            "dishes_count": len(json.loads(log.snapshot)) if log.snapshot else 0,
+        }
+        for log in logs
+    ]
+
+
+class RollbackRequest(BaseModel):
+    rollback_date: Optional[str] = None  # дата с которой откатить; default = сегодня
+
+
+@router.post("/rollback/{log_id}")
+def rollback_change(
+    log_id: int,
+    body: RollbackRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Откат bulk-изменения:
+    Для каждого блюда из снапшота создаёт новую версию техкарты в IIKO
+    со старыми ингредиентами начиная с rollback_date.
+    IIKO автоматически закрывает текущую (неправильную) версию.
+    """
+    if current_user.role not in ("admin", "co"):
+        raise HTTPException(403, "Нет доступа")
+
+    log = db.query(RecipeChangeLog).filter(RecipeChangeLog.id == log_id).first()
+    if not log:
+        raise HTTPException(404, "Запись лога не найдена")
+    if log.is_rolled_back:
+        raise HTTPException(400, "Это изменение уже было откачено")
+
+    restaurant = db.query(Restaurant).filter(Restaurant.id == log.restaurant_id).first()
+    if not restaurant:
+        raise HTTPException(404, "Ресторан не найден")
+
+    rollback_date = body.rollback_date or date.today().isoformat()
+    snapshots = json.loads(log.snapshot)
+    name_map = _get_name_map(db)
+    results = []
+
+    import time
+
+    for snap in snapshots:
+        dish_id = snap.get("dish_id")
+        dish_name = snap.get("dish_name", "?")
+
+        # Находим текущую активную техкарту для этого блюда
+        today = date.today()
+        current_chart = (
+            db.query(AssemblyChart)
+            .filter(
+                AssemblyChart.dish_id == dish_id,
+                AssemblyChart.restaurant_id == log.restaurant_id,
+                AssemblyChart.date_from <= today,
+                (AssemblyChart.date_to == None) | (AssemblyChart.date_to > today),
+            )
+            .first()
+        )
+
+        if not current_chart:
+            results.append({"dish_name": dish_name, "ok": False, "error": "текущая техкарта не найдена"})
+            continue
+
+        # Строим payload из снапшота ингредиентов
+        items = []
+        for ing in snap.get("ingredients", []):
+            items.append({
+                "sortWeight": ing.get("sort_weight", 0),
+                "productId": ing["ingredient_iiko_uuid"],
+                "productSizeSpecification": ing.get("product_size_spec_id"),
+                "storeSpecification": None,
+                "amountIn":     ing["amount_in"],
+                "amountMiddle": ing.get("amount_middle") or ing["amount_in"],
+                "amountOut":    ing.get("amount_out") or ing["amount_in"],
+                "amountIn1":    ing.get("amount_in1") or 0,
+                "amountOut1":   ing.get("amount_out1") or 0,
+                "amountIn2":    ing.get("amount_in2") or 0,
+                "amountOut2":   ing.get("amount_out2") or 0,
+                "amountIn3":    ing.get("amount_in3") or 0,
+                "amountOut3":   ing.get("amount_out3") or 0,
+                "packageCount":  ing.get("package_count") or 0,
+                "packageTypeId": ing.get("package_type_id"),
+            })
+
+        spec = json.loads(current_chart.direct_writeoff_departments or "[]")
+        payload = {
+            "assembledProductId": current_chart.dish.iiko_uuid,
+            "assembledAmount": current_chart.assembled_amount,
+            "productWriteoffStrategy": current_chart.writeoff_strategy,
+            "productSizeAssemblyStrategy": current_chart.size_assembly_strategy,
+            "effectiveDirectWriteoffStoreSpecification": {
+                "storeIds": spec,
+                "inversed": current_chart.direct_writeoff_inverse,
+            },
+            "dateFrom": rollback_date,
+            "technologyDescription": current_chart.technology_description or "",
+            "description": current_chart.description or "",
+            "appearance": current_chart.appearance or "",
+            "organoleptic": current_chart.organoleptic or "",
+            "outputComment": current_chart.output_comment or "",
+            "items": items,
+        }
+
+        try:
+            iiko_svc.save_assembly_chart(db, restaurant, payload)
+            _resync_dish(db, restaurant, current_chart.dish, name_map)
+            db.flush()
+            results.append({"dish_name": dish_name, "ok": True, "rollback_date": rollback_date})
+        except Exception as e:
+            results.append({"dish_name": dish_name, "ok": False, "error": str(e)})
+
+        time.sleep(0.3)
+
+    ok_count = sum(1 for r in results if r.get("ok"))
+    if ok_count > 0:
+        log.is_rolled_back = True
+
+    db.commit()
+
+    return {
+        "total": len(snapshots),
+        "ok": ok_count,
+        "failed": sum(1 for r in results if not r.get("ok")),
+        "rollback_date": rollback_date,
         "results": results,
     }

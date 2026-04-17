@@ -7,6 +7,27 @@ from datetime import datetime, timezone
 from app.core.database import Base
 
 
+class RecipeChangeLog(Base):
+    """
+    Лог bulk-изменений техкарт. Хранит снапшот ингредиентов до изменения
+    для возможности отката.
+    """
+    __tablename__ = "recipe_change_logs"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False, index=True)
+    operation_type = Column(String(50), nullable=False)  # bulk_remove / bulk_replace / bulk_update_amount / import_excel
+    performed_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    performed_by  = Column(String(100), nullable=True)   # username
+    effective_date = Column(Date, nullable=False)         # дата с которой вступило в силу
+    description   = Column(Text, nullable=True)           # человекочитаемое описание изменения
+    # JSON: [{dish_name, chart_id, iiko_uuid, ingredients: [{ingredient_name, ingredient_iiko_uuid, amount_in, amount_middle, amount_out}]}]
+    snapshot      = Column(Text, nullable=False)
+    is_rolled_back = Column(Boolean, default=False, nullable=False)
+
+    restaurant = relationship("Restaurant")
+
+
 class Dish(Base):
     """
     Блюда, модификаторы и заготовки из IIKO (номенклатура с техкартами).

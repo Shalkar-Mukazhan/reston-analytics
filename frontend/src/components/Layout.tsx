@@ -12,16 +12,21 @@ export default function Layout() {
   const navigate = useNavigate()
 
   const myRest = user?.role === "store" ? user?.restaurants?.[0] : null
-  const canInvoices  = user?.role !== "store" || (myRest?.feat_invoices  !== false)
-  const canAnalytics = user?.role !== "store" || (myRest?.feat_analytics !== false)
+  const isStore = user?.role === "store"
+
+  const canReports   = !isStore || (myRest?.feat_reports   !== false)
+  const canInvoices  = !isStore || (myRest?.feat_invoices  !== false)
+  const canAnalytics = !isStore || (myRest?.feat_analytics !== false)
+  const canPlanning  = !isStore || (myRest?.feat_planning  !== false)
+  const canChecklist = !isStore || (myRest?.feat_checklist !== false)
 
   const nav = [
     { to: "/dashboard", icon: LayoutDashboard, label: "Дашборд",      show: true },
-    { to: "/reports",   icon: FileText,         label: "Отчёты",       show: true },
+    { to: "/reports",   icon: FileText,         label: "Отчёты",       show: canReports },
     { to: "/invoices",  icon: FileInput,         label: "Накладные",    show: canInvoices },
     { to: "/analytics", icon: TrendingUp,        label: "Аналитика",    show: canAnalytics },
-    { to: "/planning",  icon: BarChart2,          label: "Планирование", show: true },
-    { to: "/checklist", icon: TableProperties,    label: "Чек-лист",     show: true },
+    { to: "/planning",  icon: BarChart2,          label: "Планирование", show: canPlanning },
+    { to: "/checklist", icon: TableProperties,    label: "Чек-лист",     show: canChecklist },
     { to: "/about",     icon: Info,               label: "О системе",    show: true },
   ].filter(item => item.show)
 
