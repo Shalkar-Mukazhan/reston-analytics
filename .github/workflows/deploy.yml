@@ -25,13 +25,13 @@ jobs:
             git pull origin main
 
             echo "==> Rebuilding and restarting containers..."
-            docker-compose -f docker-compose.prod.yml up -d --build
+            docker-compose up -d --build
 
             echo "==> Waiting for backend to be ready..."
             sleep 10
 
             echo "==> Running database migrations..."
-            docker-compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
+            docker-compose exec -T backend alembic upgrade head
 
             echo "==> Cleaning up old Docker images..."
             docker image prune -f
