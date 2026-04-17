@@ -12,6 +12,9 @@ export interface Restaurant {
   is_active?: boolean
   feat_invoices?: boolean
   feat_analytics?: boolean
+  feat_reports?: boolean
+  feat_planning?: boolean
+  feat_checklist?: boolean
   google_sheet_url?: string | null
 }
 

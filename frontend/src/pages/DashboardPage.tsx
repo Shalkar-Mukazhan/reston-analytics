@@ -8,7 +8,7 @@ import {
 } from "lucide-react"
 import { cn } from "../lib/utils"
 import {
-  PieChart, Pie, Cell, Tooltip as ReTooltip, Legend, ResponsiveContainer,
+  PieChart, Pie, Cell, Tooltip as ReTooltip, ResponsiveContainer,
 } from "recharts"
 
 interface SparkPoint { period: string; waste_pct: number }
@@ -349,7 +349,7 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
 }
 
 // ── Вид для store — один ресторан крупно ──────────────────────────────────────
-function StoreDashboard({ m, reports, refreshing }: { m: RestaurantMetric; reports: RecentReport[]; refreshing: boolean }) {
+function StoreDashboard({ m, reports: _reports, refreshing }: { m: RestaurantMetric; reports: RecentReport[]; refreshing: boolean }) {
   const ok = m.waste_pct <= WASTE_LIMIT
 
   return (
