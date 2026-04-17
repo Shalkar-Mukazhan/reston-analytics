@@ -24,11 +24,14 @@ jobs:
             echo "==> Pulling latest code..."
             git pull origin main
 
-            echo "==> Running database migrations..."
-            docker-compose -f docker-compose.prod.yml run --rm backend alembic upgrade head
-
             echo "==> Rebuilding and restarting containers..."
             docker-compose -f docker-compose.prod.yml up -d --build
+
+            echo "==> Waiting for backend to be ready..."
+            sleep 10
+
+            echo "==> Running database migrations..."
+            docker-compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
 
             echo "==> Cleaning up old Docker images..."
             docker image prune -f
