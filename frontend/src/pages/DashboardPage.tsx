@@ -670,7 +670,7 @@ export default function DashboardPage() {
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshingId, setRefreshingId] = useState<number | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isCurrent = month === currentYM()
 
@@ -696,22 +696,18 @@ export default function DashboardPage() {
 
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    setRefreshing(false)
+    setRefreshingId(null)
   }
 
-  // Polling: каждые 3 сек, макс 5 попыток (~15 сек), потом останавливается
-  const startPolling = (_ym: string, _wk?: string | null, prevCount = 0) => {
+  // Polling: один раз через 3 сек, потом останавливается
+  const startPolling = (_ym: string, _wk?: string | null) => {
     stopPolling()
-    let attempts = 0
-    const maxAttempts = 5
-    pollRef.current = setInterval(async () => {
-      const result = await refetch()
-      const newCount = result.data?.restaurants?.length ?? 0
-      attempts++
-      if (newCount > prevCount || attempts >= maxAttempts) {
-        stopPolling()
-        setRefreshing(false)
-        setRefreshingId(null)
-      }
+    pollRef.current = setTimeout(async () => {
+      await refetch()
+      setRefreshing(false)
+      setRefreshingId(null)
+      pollRef.current = null
     }, 3000)
   }
 
@@ -745,7 +741,9 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    return () => stopPolling()
+    return () => {
+      if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null }
+    }
   }, [month])
 
   const isStore = user?.role === "store"
