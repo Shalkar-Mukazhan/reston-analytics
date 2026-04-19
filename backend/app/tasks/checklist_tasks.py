@@ -434,6 +434,40 @@ def _sync_restaurant(db, restaurant, sheet_id: str, is_morning: bool, business_d
     hours_data = _parse_hourly(hourly_rows)
     log.info("%s: факт — %d часов с данными", restaurant.name, len(hours_data))
 
+    # ── Сохраняем дневной факт в sales_daily_facts (планирование) ──
+    # Данные уже есть в памяти — ноль новых запросов к IIKO
+    if hours_data:
+        day_totals = _daily_from_hourly(hours_data)
+        if day_totals["total_gc"] > 0:
+            from datetime import timezone as _tz
+            gc    = day_totals["total_gc"]
+            sales = round(day_totals["total_sales"], 2)
+            av    = round(sales / gc, 2) if gc > 0 else 0
+            existing_fact = db.query(SalesDailyFact).filter(
+                SalesDailyFact.restaurant_id == restaurant.id,
+                SalesDailyFact.date == business_date,
+            ).first()
+            if existing_fact:
+                existing_fact.gc_fact    = gc
+                existing_fact.sales_fact = sales
+                existing_fact.av_check_fact = av
+                existing_fact.synced_at  = datetime.now(_tz.utc)
+            else:
+                db.add(SalesDailyFact(
+                    restaurant_id=restaurant.id,
+                    date=business_date,
+                    gc_fact=gc,
+                    sales_fact=sales,
+                    av_check_fact=av,
+                ))
+            try:
+                db.commit()
+                log.info("%s: sales_daily_facts обновлён — GC=%d Sales=%s",
+                         restaurant.name, gc, sales)
+            except Exception as e:
+                db.rollback()
+                log.error("%s: ошибка сохранения sales_daily_facts: %s", restaurant.name, e)
+
     # ── УТРЕННИЙ СБРОС (07:00) ──
     if is_morning:
         # Очистка
