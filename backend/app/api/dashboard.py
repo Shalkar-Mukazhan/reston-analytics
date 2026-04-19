@@ -41,7 +41,7 @@ def _build_restaurant_metrics(metrics: list[WasteMetric], rest_map: dict) -> lis
             "waste_pct": m.waste_pct or 0,
             "to_writeoff_qty": m.to_writeoff_qty or 0,
             "over_limit_count": m.over_limit_count or 0,
-            "updated_at": m.created_at,
+            "updated_at": m.updated_at or m.created_at,
         })
     result.sort(key=lambda x: x["waste_pct"], reverse=True)
     return result

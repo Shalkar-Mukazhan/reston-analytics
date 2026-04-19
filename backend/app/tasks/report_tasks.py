@@ -263,24 +263,39 @@ def generate_report_task(self, report_id: int):
         writeoff_pct    = round(writeoff_sum / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
         waste_pct       = round((shortage_sum + writeoff_sum) / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
 
-        # Upsert: удаляем старую метрику за тот же период и ресторан
-        db.query(WasteMetric).filter(
+        # Upsert: обновляем если есть, иначе создаём (не удаляем — сохраняем created_at)
+        from datetime import timezone as _tz
+        existing_metric = db.query(WasteMetric).filter(
             WasteMetric.restaurant_id == restaurant.id,
             WasteMetric.period == report.period,
-        ).delete()
-        db.add(WasteMetric(
-            restaurant_id=restaurant.id,
-            period=report.period,
-            revenue_sum=round(revenue_sum, 2),
-            shortage_sum=round(shortage_sum, 2),
-            complete_waste_sum=round(writeoff_sum, 2),
-            waste_pct=waste_pct,
-            shortage_pct=shortage_pct,
-            writeoff_pct=writeoff_pct,
-            to_writeoff_qty=to_writeoff_qty,
-            over_limit_count=over_limit_count,
-            report_id=report_id,
-        ))
+        ).first()
+        now = datetime.now(_tz.utc)
+        if existing_metric:
+            existing_metric.revenue_sum        = round(revenue_sum, 2)
+            existing_metric.shortage_sum       = round(shortage_sum, 2)
+            existing_metric.complete_waste_sum = round(writeoff_sum, 2)
+            existing_metric.waste_pct          = waste_pct
+            existing_metric.shortage_pct       = shortage_pct
+            existing_metric.writeoff_pct       = writeoff_pct
+            existing_metric.to_writeoff_qty    = to_writeoff_qty
+            existing_metric.over_limit_count   = over_limit_count
+            existing_metric.report_id          = report_id
+            existing_metric.updated_at         = now
+        else:
+            db.add(WasteMetric(
+                restaurant_id=restaurant.id,
+                period=report.period,
+                revenue_sum=round(revenue_sum, 2),
+                shortage_sum=round(shortage_sum, 2),
+                complete_waste_sum=round(writeoff_sum, 2),
+                waste_pct=waste_pct,
+                shortage_pct=shortage_pct,
+                writeoff_pct=writeoff_pct,
+                to_writeoff_qty=to_writeoff_qty,
+                over_limit_count=over_limit_count,
+                report_id=report_id,
+                updated_at=now,
+            ))
         db.commit()
 
         return {"status": "ready", "items_count": len(items)}
@@ -370,34 +385,27 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                 errors.append({"period": period, "error": str(e)})
                 continue
 
-            all_existing = db.query(WasteMetric).filter(
+            existing_metric = db.query(WasteMetric).filter(
                 WasteMetric.restaurant_id == restaurant_id,
                 WasteMetric.period == period,
-            ).all()
+            ).first()
 
-            shortage_sum = 0.0
-            report_row = next((m for m in all_existing if m.report_id is not None), None)
-            if report_row:
-                shortage_sum = float(report_row.shortage_sum or 0)
-
-            for m in all_existing:
-                if m.report_id is None:
-                    db.delete(m)
-            db.flush()
-
-            sho = shortage_sum
+            sho = float(existing_metric.shortage_sum or 0) if existing_metric else 0.0
             wri = complete_waste_sum
             rev = revenue_sum
-            waste_pct = round((sho + wri) / rev * 100, 4) if rev > 0 else 0.0
+            waste_pct    = round((sho + wri) / rev * 100, 4) if rev > 0 else 0.0
             shortage_pct = round(sho / rev * 100, 4) if rev > 0 else 0.0
             writeoff_pct = round(wri / rev * 100, 4) if rev > 0 else 0.0
 
-            if report_row:
-                report_row.revenue_sum = round(rev, 2)
-                report_row.complete_waste_sum = round(wri, 2)
-                report_row.waste_pct = waste_pct
-                report_row.shortage_pct = shortage_pct
-                report_row.writeoff_pct = writeoff_pct
+            from datetime import timezone as _tz2
+            now2 = _dt.now(_tz2.utc)
+            if existing_metric:
+                existing_metric.revenue_sum        = round(rev, 2)
+                existing_metric.complete_waste_sum = round(wri, 2)
+                existing_metric.waste_pct          = waste_pct
+                existing_metric.shortage_pct       = shortage_pct
+                existing_metric.writeoff_pct       = writeoff_pct
+                existing_metric.updated_at         = now2
             else:
                 db.add(WasteMetric(
                     restaurant_id=restaurant_id,
@@ -411,6 +419,7 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                     waste_pct=waste_pct,
                     to_writeoff_qty=0.0,
                     over_limit_count=0,
+                    updated_at=now2,
                 ))
 
             results.append({"period": period, "revenue_sum": round(rev, 2), "waste_pct": waste_pct})
@@ -535,6 +544,8 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
             WasteMetric.period == period,
         ).first()
 
+        from datetime import timezone as _tz3
+        now3 = datetime.now(_tz3.utc)
         if existing:
             existing.revenue_sum        = round(revenue_sum, 2)
             existing.shortage_sum       = round(shortage_sum, 2)
@@ -542,6 +553,7 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
             existing.shortage_pct       = shortage_pct
             existing.writeoff_pct       = writeoff_pct
             existing.waste_pct          = waste_pct
+            existing.updated_at         = now3
         else:
             db.add(WasteMetric(
                 restaurant_id=restaurant_id,
@@ -554,6 +566,7 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
                 waste_pct=waste_pct,
                 to_writeoff_qty=0,
                 over_limit_count=0,
+                updated_at=now3,
             ))
         db.commit()
 
