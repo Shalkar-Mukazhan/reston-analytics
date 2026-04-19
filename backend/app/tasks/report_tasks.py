@@ -389,13 +389,14 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                     rows = filter_by_dept(raw)
                     if rows:
                         df_inv = pd.DataFrame(rows)
-                        sum_col = next((c for c in ["Инвентаризация сумма", "Sum", "SumInt"] if c in df_inv.columns), None)
-                        if sum_col:
-                            df_inv[sum_col] = df_inv[sum_col].apply(
+                        amt_col = "Amount"
+                        contr_col = "Contr-Account.Name"
+                        if amt_col in df_inv.columns and contr_col in df_inv.columns:
+                            df_inv[amt_col] = df_inv[amt_col].apply(
                                 lambda x: float(str(x).replace(",", ".")) if x else 0
                             )
-                            neg = df_inv[df_inv[sum_col] < 0][sum_col].sum()
-                            shortage_sum = abs(float(neg))
+                            shortage_rows = df_inv[df_inv[contr_col] == "Недостача инвентаризации"]
+                            shortage_sum = float(shortage_rows[amt_col].abs().sum())
 
             except Exception as e:
                 errors.append({"period": period, "error": str(e)})
@@ -538,17 +539,18 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
                     lambda x: abs(float(str(x).replace(",", ".")) if x else 0)
                 ).sum())
 
-        # Shortage из инвентаризации (отрицательные суммы)
+        # Shortage: строки где Contr-Account.Name = "Недостача инвентаризации"
         shortage_sum = 0.0
         if inventory_rows:
             df_inv = pd.DataFrame(inventory_rows)
-            sum_col = "Sum.ResignedSum"
-            if sum_col in df_inv.columns:
-                df_inv[sum_col] = df_inv[sum_col].apply(
+            amt_col = "Amount"
+            contr_col = "Contr-Account.Name"
+            if amt_col in df_inv.columns and contr_col in df_inv.columns:
+                df_inv[amt_col] = df_inv[amt_col].apply(
                     lambda x: float(str(x).replace(",", ".")) if x else 0
                 )
-                shortage_sum = float(df_inv[df_inv[sum_col] < 0][sum_col].sum())
-                shortage_sum = abs(shortage_sum)
+                shortage_rows = df_inv[df_inv[contr_col] == "Недостача инвентаризации"]
+                shortage_sum = float(shortage_rows[amt_col].abs().sum())
 
         shortage_pct = round(shortage_sum / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
         writeoff_pct = round(writeoff_sum / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
