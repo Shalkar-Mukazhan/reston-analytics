@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import api from "../api/client"
 import { useAuth } from "../hooks/useAuth"
 import {
@@ -665,7 +665,6 @@ function weekLabel(w: string) {
 // ── Главная страница ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { user } = useAuth()
-  const queryClient = useQueryClient()
   const [month, setMonth] = useState(currentYM)
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -695,7 +694,7 @@ export default function DashboardPage() {
   }, [data?.selected_week])
 
   const stopPolling = () => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null }
     setRefreshing(false)
     setRefreshingId(null)
   }
@@ -727,14 +726,13 @@ export default function DashboardPage() {
   // Обновить метрики всех ресторанов (CO/admin) — или одного (store)
   const refreshAll = async (ym: string, restaurantId?: number) => {
     setRefreshing(true)
-    const currentCount = data?.restaurants?.length ?? 0
     try {
       if (restaurantId) {
         await api.post("/dashboard/refresh-metrics", { restaurant_id: restaurantId, period: ym })
       } else {
         await api.post(`/dashboard/refresh-metrics-all?period=${ym}`)
       }
-      startPolling(ym, selectedWeek, currentCount)
+      startPolling(ym, selectedWeek)
     } catch {
       setRefreshing(false)
     }
