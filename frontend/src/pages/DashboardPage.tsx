@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import api from "../api/client"
 import { useAuth } from "../hooks/useAuth"
 import {
@@ -74,6 +75,8 @@ interface ChannelStat {
   gc: number
   avg_check: number
   pct: number
+  mop_gc: number | null
+  mop_pct: number | null
 }
 
 interface HourStat {
@@ -100,6 +103,10 @@ function fmtMoney(n: number) {
   if (n >= 1_000_000) return `${fmt(n / 1_000_000, 1)} млн ₸`
   if (n >= 1_000) return `${fmt(n / 1_000, 0)} тыс ₸`
   return `${fmt(n)} ₸`
+}
+
+function fmtMoneyFull(n: number) {
+  return `${n.toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₸`
 }
 
 function WasteBadge({ pct }: { pct: number }) {
@@ -156,7 +163,8 @@ function DeltaBadge({ delta }: { delta: number | null }) {
 const CHANNEL_COLORS: Record<string, string> = {
   DLV: "#3b82f6",
   DT: "#f59e0b",
-  Cafe: "#22c55e",
+  FC: "#22c55e",
+  Cafe: "#10b981",
   Kiosk: "#a855f7",
 }
 const DEFAULT_COLOR = "#9ca3af"
@@ -227,7 +235,7 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
           <div className="grid grid-cols-3 gap-3">
             <div className="card p-4 text-center">
               <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Продажи</p>
-              <p className="text-xl font-bold text-brand-dark">{fmtMoney(data!.totals.sales_sum)}</p>
+              <p className="text-xl font-bold text-brand-dark">{fmtMoneyFull(data!.totals.sales_sum)}</p>
             </div>
             <div className="card p-4 text-center">
               <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Чеков (GC)</p>
@@ -288,18 +296,29 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
                 </thead>
                 <tbody>
                   {data!.by_channel.map(ch => (
-                    <tr key={ch.channel} className="border-b border-brand-border/20">
-                      <td className="py-1.5">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: CHANNEL_COLORS[ch.channel] ?? DEFAULT_COLOR }} />
-                          <span className="font-medium text-brand-dark">{ch.channel}</span>
-                        </span>
-                      </td>
-                      <td className="py-1.5 text-right tabular-nums text-brand-dark">{fmtMoney(ch.sales_sum)}</td>
-                      <td className="py-1.5 text-right tabular-nums text-brand-muted">{ch.gc}</td>
-                      <td className="py-1.5 text-right tabular-nums text-brand-muted">{ch.avg_check.toLocaleString("ru-RU")} ₸</td>
-                      <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: CHANNEL_COLORS[ch.channel] ?? DEFAULT_COLOR }}>{ch.pct}%</td>
-                    </tr>
+                    <>
+                      <tr key={ch.channel} className="border-b border-brand-border/20">
+                        <td className="py-1.5">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: CHANNEL_COLORS[ch.channel] ?? DEFAULT_COLOR }} />
+                            <span className="font-medium text-brand-dark">{ch.channel}</span>
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right tabular-nums text-brand-dark">{fmtMoneyFull(ch.sales_sum)}</td>
+                        <td className="py-1.5 text-right tabular-nums text-brand-muted">{ch.gc}</td>
+                        <td className="py-1.5 text-right tabular-nums text-brand-muted">{ch.avg_check.toLocaleString("ru-RU")} ₸</td>
+                        <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: CHANNEL_COLORS[ch.channel] ?? DEFAULT_COLOR }}>{ch.pct}%</td>
+                      </tr>
+                      {ch.channel === "FC" && ch.mop_gc != null && (
+                        <tr key="mop" className="border-b border-brand-border/10 bg-brand-bg/30">
+                          <td className="py-1 pl-6 text-xs text-brand-muted">└ MOP (мобильное)</td>
+                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">—</td>
+                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">{ch.mop_gc}</td>
+                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">—</td>
+                          <td className="py-1 text-right tabular-nums text-xs font-semibold text-blue-500">{ch.mop_pct}%</td>
+                        </tr>
+                      )}
+                    </>
                   ))}
                 </tbody>
               </table>
@@ -324,7 +343,7 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
                     {data!.by_hour.map(h => (
                       <tr key={h.hour} className="border-b border-brand-border/30 hover:bg-brand-bg/50 transition-colors">
                         <td className="py-2 px-4 font-mono font-semibold text-brand-dark">{h.hour}:00</td>
-                        <td className="py-2 px-4 text-right tabular-nums text-brand-dark">{fmtMoney(h.sales_sum)}</td>
+                        <td className="py-2 px-4 text-right tabular-nums text-brand-dark">{fmtMoneyFull(h.sales_sum)}</td>
                         <td className="py-2 px-4 text-right tabular-nums text-brand-muted">{h.gc}</td>
                         <td className="py-2 px-4 text-right tabular-nums text-brand-muted">{h.avg_check.toLocaleString("ru-RU")} ₸</td>
                       </tr>
@@ -333,7 +352,7 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
                   <tfoot className="sticky bottom-0 bg-white border-t-2 border-brand-border">
                     <tr>
                       <td className="py-2 px-4 font-semibold text-brand-dark text-xs">Итого</td>
-                      <td className="py-2 px-4 text-right tabular-nums font-semibold text-brand-dark">{fmtMoney(data!.totals.sales_sum)}</td>
+                      <td className="py-2 px-4 text-right tabular-nums font-semibold text-brand-dark">{fmtMoneyFull(data!.totals.sales_sum)}</td>
                       <td className="py-2 px-4 text-right tabular-nums font-semibold text-brand-dark">{data!.totals.gc}</td>
                       <td className="py-2 px-4 text-right tabular-nums font-semibold text-brand-dark">{data!.totals.avg_check.toLocaleString("ru-RU")} ₸</td>
                     </tr>
@@ -387,7 +406,7 @@ function StoreDashboard({ m, reports: _reports, refreshing }: { m: RestaurantMet
           <p className="text-brand-muted text-xs mt-1">{fmtMoney(m.shortage_sum)}</p>
         </div>
         <div className="card p-5">
-          <p className="text-brand-muted text-xs uppercase tracking-wide mb-2">% Полного списания</p>
+          <p className="text-brand-muted text-xs uppercase tracking-wide mb-2">Complete Waste %</p>
           <p className="text-3xl font-bold text-brand-dark">{fmt(m.writeoff_pct)}%</p>
           <p className="text-brand-muted text-xs mt-1">{fmtMoney(m.complete_waste_sum)}</p>
         </div>
@@ -640,40 +659,45 @@ function weekLabel(w: string) {
 // ── Главная страница ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { user } = useAuth()
-  const [data, setData] = useState<DashboardData | null>(null)
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [month, setMonth] = useState(currentYM)
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)   // идёт ли обновление метрик
-  const [refreshingId, setRefreshingId] = useState<number | null>(null)  // CO: какой ресторан
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshingId, setRefreshingId] = useState<number | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const { data, isLoading: loading, refetch } = useQuery<DashboardData>({
+    queryKey: ["dashboard", month, selectedWeek],
+    queryFn: async () => {
+      const params = new URLSearchParams({ month })
+      if (selectedWeek) params.set("week", selectedWeek)
+      const res = await api.get(`/dashboard/?${params}`)
+      return res.data
+    },
+    staleTime: 2 * 60 * 1000,
+  })
+
+  // Синхронизируем selectedWeek если сервер вернул другой
+  const prevWeekFromApi = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (data?.selected_week !== undefined && data.selected_week !== prevWeekFromApi.current) {
+      prevWeekFromApi.current = data.selected_week ?? null
+      setSelectedWeek(data.selected_week ?? null)
+    }
+  }, [data?.selected_week])
 
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
   }
 
-  const load = async (ym: string, wk?: string | null) => {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ month: ym })
-      if (wk) params.set("week", wk)
-      const res = await api.get(`/dashboard/?${params}`)
-      setData(res.data)
-      setSelectedWeek(res.data.selected_week ?? null)
-      return res.data as DashboardData
-    } finally {
-      setLoading(false)
-    }
-  }
-
   // Polling: каждые 3 сек, макс 5 попыток (~15 сек), потом останавливается
-  const startPolling = (ym: string, wk?: string | null, prevCount = 0) => {
+  const startPolling = (_ym: string, _wk?: string | null, prevCount = 0) => {
     stopPolling()
     let attempts = 0
     const maxAttempts = 5
     pollRef.current = setInterval(async () => {
-      const newData = await load(ym, wk)
-      const newCount = newData?.restaurants?.length ?? 0
+      const result = await refetch()
+      const newCount = result.data?.restaurants?.length ?? 0
       attempts++
       if (newCount > prevCount || attempts >= maxAttempts) {
         stopPolling()
@@ -713,7 +737,6 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    load(month, null)
     return () => stopPolling()
   }, [month])
 
@@ -740,7 +763,6 @@ export default function DashboardPage() {
 
   const handleWeekSelect = (wk: string) => {
     setSelectedWeek(wk)
-    load(month, wk)
   }
 
   const handleMonthChange = (ym: string) => {

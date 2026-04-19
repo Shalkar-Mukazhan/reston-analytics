@@ -313,13 +313,15 @@ def get_dashboard(
 
 def _map_channel(group: str) -> str:
     g = group.upper()
-    if g.startswith("DLV"):
+    if "DLV" in g:
         return "DLV"
-    if g.startswith("DT"):
+    if "DT" in g:
         return "DT"
-    if g.startswith("FC"):
+    if "CAFE" in g:
         return "Cafe"
-    if "CSO" in g:
+    if g.startswith("FC"):
+        return "FC"
+    if "CSO" in g or g.startswith("KZ"):
         return "Kiosk"
     return group
 
@@ -379,26 +381,34 @@ def get_hourly_sales(
     if not rows:
         return empty
 
-    # Агрегация по каналу
+    # Агрегация по каналу + MOP внутри FC
     ch_agg: dict[str, dict] = defaultdict(lambda: {"sales_sum": 0, "gc": 0})
+    mop_gc = 0
     for r in rows:
         ch = _map_channel(r["RestorauntGroup"])
         ch_agg[ch]["sales_sum"] += r["DishDiscountSumInt"]
         ch_agg[ch]["gc"] += r["UniqOrderId"]
+        if ch == "FC" and "MOP" in str(r.get("PayTypes", "") or "").upper():
+            mop_gc += r["UniqOrderId"]
 
     total_sales = sum(v["sales_sum"] for v in ch_agg.values())
     total_gc = sum(v["gc"] for v in ch_agg.values())
 
-    by_channel = [
-        {
+    by_channel = []
+    for ch, v in sorted(ch_agg.items(), key=lambda x: x[1]["sales_sum"], reverse=True):
+        entry = {
             "channel": ch,
             "sales_sum": v["sales_sum"],
             "gc": v["gc"],
             "avg_check": round(v["sales_sum"] / v["gc"]) if v["gc"] > 0 else 0,
             "pct": round(v["sales_sum"] / total_sales * 100, 1) if total_sales > 0 else 0,
+            "mop_gc": None,
+            "mop_pct": None,
         }
-        for ch, v in sorted(ch_agg.items(), key=lambda x: x[1]["sales_sum"], reverse=True)
-    ]
+        if ch == "FC" and v["gc"] > 0:
+            entry["mop_gc"] = mop_gc
+            entry["mop_pct"] = round(mop_gc / v["gc"] * 100, 1)
+        by_channel.append(entry)
 
     # Агрегация по часу
     hr_agg: dict[str, dict] = defaultdict(lambda: {"sales_sum": 0, "gc": 0})
