@@ -361,7 +361,7 @@ export default function InvoicesPage() {
           </h2>
           <button
             className="btn-secondary text-xs py-1.5 px-3"
-            onClick={loadInvoices}
+            onClick={() => loadInvoices()}
             disabled={loadingInvoices}
           >
             <RefreshCw size={13} className={loadingInvoices ? "animate-spin" : ""} />
