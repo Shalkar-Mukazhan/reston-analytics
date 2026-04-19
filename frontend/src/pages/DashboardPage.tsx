@@ -77,6 +77,8 @@ interface ChannelStat {
   pct: number
   mop_gc: number | null
   mop_pct: number | null
+  mop_sales: number | null
+  mop_avg_check: number | null
 }
 
 interface HourStat {
@@ -309,12 +311,16 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
                         <td className="py-1.5 text-right tabular-nums text-brand-muted">{ch.avg_check.toLocaleString("ru-RU")} ₸</td>
                         <td className="py-1.5 text-right tabular-nums font-semibold" style={{ color: CHANNEL_COLORS[ch.channel] ?? DEFAULT_COLOR }}>{ch.pct}%</td>
                       </tr>
-                      {ch.channel === "FC" && ch.mop_gc != null && (
+                      {ch.channel === "FC" && ch.mop_gc != null && ch.mop_gc > 0 && (
                         <tr key="mop" className="border-b border-brand-border/10 bg-brand-bg/30">
                           <td className="py-1 pl-6 text-xs text-brand-muted">└ MOP (мобильное)</td>
-                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">—</td>
+                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">
+                            {ch.mop_sales ? fmtMoneyFull(ch.mop_sales) : "—"}
+                          </td>
                           <td className="py-1 text-right tabular-nums text-xs text-brand-muted">{ch.mop_gc}</td>
-                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">—</td>
+                          <td className="py-1 text-right tabular-nums text-xs text-brand-muted">
+                            {ch.mop_avg_check ? `${ch.mop_avg_check.toLocaleString("ru-RU")} ₸` : "—"}
+                          </td>
                           <td className="py-1 text-right tabular-nums text-xs font-semibold text-blue-500">{ch.mop_pct}%</td>
                         </tr>
                       )}

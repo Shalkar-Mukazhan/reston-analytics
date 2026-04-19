@@ -27,5 +27,11 @@ celery_app.conf.update(
             "task": "app.tasks.checklist_tasks.sync_checklist_hourly",
             "schedule": crontab(minute=0),   # каждый час в 00 минут
         },
+        # Планирование: каждый час → sales_daily_facts для ВСЕХ ресторанов
+        # Redis-кеш гарантирует отсутствие повторных запросов к IIKO
+        "planning-facts-hourly-sync": {
+            "task": "app.tasks.checklist_tasks.sync_planning_facts_hourly",
+            "schedule": crontab(minute=5),   # в :05 каждого часа (после чек-листа)
+        },
     },
 )

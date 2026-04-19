@@ -690,6 +690,97 @@ def start_day_sync_task(restaurant_id: int):
     log.info("=== start-day sync done ===")
 
 
+@celery_app.task(name="app.tasks.checklist_tasks.sync_planning_facts_hourly")
+def sync_planning_facts_hourly():
+    """
+    Каждый час: обновляет sales_daily_facts для ВСЕХ активных ресторанов.
+    Работает независимо от чек-листа — не требует нажатия 'Начать день'.
+    Использует Redis-кеш: если ресторан уже запросился через чек-лист,
+    данные берутся из кеша без повторного запроса к IIKO.
+    """
+    from app.core.database import SessionLocal
+    from app.models.restaurant import Restaurant, PresetDefinition
+    from app.models.planning import SalesDailyFact
+    from app.services.iiko import fetch_olap
+
+    now_almaty = datetime.now(ALMATY_TZ)
+    business_date = (now_almaty - timedelta(hours=7)).date() if now_almaty.hour < 7 \
+                    else now_almaty.date()
+
+    log.info("=== sync_planning_facts_hourly | biz_date=%s ===", business_date)
+
+    db = SessionLocal()
+    try:
+        restaurants = db.query(Restaurant).filter(Restaurant.is_active == True).all()
+
+        global_preset = db.query(PresetDefinition).filter(
+            PresetDefinition.preset_type == "Aim with hour"
+        ).first()
+
+        date_from = business_date.strftime("%Y-%m-%dT00:00:00")
+        date_to   = (business_date + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+
+        updated = 0
+        for i, restaurant in enumerate(restaurants):
+            if i > 0:
+                time.sleep(1)
+
+            preset_uuid = restaurant.get_preset("Aim with hour")
+            if not preset_uuid and global_preset:
+                preset_uuid = global_preset.preset_uuid
+            if not preset_uuid:
+                continue
+
+            try:
+                rows = fetch_olap(db, restaurant, preset_uuid, date_from, date_to)
+                dept = restaurant.department_name or restaurant.name
+                rows = [r for r in rows if r.get("Department") == dept]
+                if not rows:
+                    continue
+
+                hours_data = _parse_hourly(rows)
+                if not hours_data:
+                    continue
+
+                day = _daily_from_hourly(hours_data)
+                gc    = day["total_gc"]
+                sales = round(day["total_sales"], 2)
+                if gc <= 0:
+                    continue
+
+                av = round(sales / gc, 2)
+                from datetime import timezone as _tz
+                existing = db.query(SalesDailyFact).filter(
+                    SalesDailyFact.restaurant_id == restaurant.id,
+                    SalesDailyFact.date == business_date,
+                ).first()
+                if existing:
+                    existing.gc_fact = gc
+                    existing.sales_fact = sales
+                    existing.av_check_fact = av
+                    existing.synced_at = datetime.now(_tz.utc)
+                else:
+                    db.add(SalesDailyFact(
+                        restaurant_id=restaurant.id,
+                        date=business_date,
+                        gc_fact=gc,
+                        sales_fact=sales,
+                        av_check_fact=av,
+                    ))
+                updated += 1
+            except Exception as e:
+                log.error("%s: ошибка sync_planning_facts: %s", restaurant.name, e)
+
+        db.commit()
+        log.info("=== sync_planning_facts_hourly done: %d/%d ресторанов ===",
+                 updated, len(restaurants))
+    except Exception as e:
+        db.rollback()
+        log.error("sync_planning_facts_hourly: критическая ошибка: %s", e)
+    finally:
+        db.close()
+
+
 def _extract_sheet_id(url: str) -> str | None:
     """
     Извлекает spreadsheet ID из Google Sheets URL.
