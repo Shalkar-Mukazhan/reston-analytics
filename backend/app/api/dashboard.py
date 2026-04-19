@@ -422,13 +422,14 @@ def get_hourly_sales(
         hr_agg[r["HourClose"]]["sales_sum"] += r["DishDiscountSumInt"]
         hr_agg[r["HourClose"]]["gc"] += r["UniqOrderId"]
 
+    start_hour = restaurant.checklist_start_hour or 5
+
     def _business_hour_key(h):
-        """Сортировка часов по бизнес-дню: 7,8,...23,0,1,2,3,4,5,6"""
         try:
             n = int(h)
         except (ValueError, TypeError):
             return 99
-        return n - 7 if n >= 7 else n + 17
+        return (n - start_hour) % 24
 
     by_hour = [
         {
