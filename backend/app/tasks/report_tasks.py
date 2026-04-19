@@ -318,8 +318,9 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
         if not restaurant:
             return {"error": "Restaurant not found"}
 
-        revenue_preset = restaurant.get_preset("revenue_net")
-        waste_preset = restaurant.get_preset("complete_waste")
+        revenue_preset   = restaurant.get_preset("revenue_net")
+        waste_preset     = restaurant.get_preset("complete_waste")
+        inventory_preset = restaurant.get_preset("inventory")
         dept = restaurant.department_name or restaurant.name
 
         def filter_by_dept(rows):
@@ -343,6 +344,7 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
 
             revenue_sum = 0.0
             complete_waste_sum = 0.0
+            shortage_sum = 0.0
 
             try:
                 if revenue_preset:
@@ -366,45 +368,49 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                             complete_waste_sum = float(df[col].apply(
                                 lambda x: abs(float(str(x).replace(",", ".")) if x else 0)
                             ).sum())
+
+                if inventory_preset:
+                    raw = fetch_olap(db, restaurant, inventory_preset, iiko_from, iiko_to)
+                    rows = filter_by_dept(raw)
+                    if rows:
+                        df_inv = pd.DataFrame(rows)
+                        col = "Sum.ResignedSum"
+                        if col in df_inv.columns:
+                            df_inv[col] = df_inv[col].apply(
+                                lambda x: float(str(x).replace(",", ".")) if x else 0
+                            )
+                            shortage_sum = abs(float(df_inv[df_inv[col] < 0][col].sum()))
+
             except Exception as e:
                 errors.append({"period": period, "error": str(e)})
                 continue
 
-            all_existing = db.query(WasteMetric).filter(
+            existing = db.query(WasteMetric).filter(
                 WasteMetric.restaurant_id == restaurant_id,
                 WasteMetric.period == period,
-            ).all()
+            ).first()
 
-            shortage_sum = 0.0
-            report_row = next((m for m in all_existing if m.report_id is not None), None)
-            if report_row:
-                shortage_sum = float(report_row.shortage_sum or 0)
-
-            for m in all_existing:
-                if m.report_id is None:
-                    db.delete(m)
-            db.flush()
-
-            sho = shortage_sum
-            wri = complete_waste_sum
             rev = revenue_sum
-            waste_pct = round((sho + wri) / rev * 100, 4) if rev > 0 else 0.0
+            wri = complete_waste_sum
+            sho = shortage_sum
+            waste_pct    = round((sho + wri) / rev * 100, 4) if rev > 0 else 0.0
             shortage_pct = round(sho / rev * 100, 4) if rev > 0 else 0.0
             writeoff_pct = round(wri / rev * 100, 4) if rev > 0 else 0.0
 
-            if report_row:
-                report_row.revenue_sum = round(rev, 2)
-                report_row.complete_waste_sum = round(wri, 2)
-                report_row.waste_pct = waste_pct
-                report_row.shortage_pct = shortage_pct
-                report_row.writeoff_pct = writeoff_pct
+            if existing:
+                existing.revenue_sum        = round(rev, 2)
+                existing.shortage_sum       = round(sho, 2)
+                existing.complete_waste_sum = round(wri, 2)
+                existing.waste_pct          = waste_pct
+                existing.shortage_pct       = shortage_pct
+                existing.writeoff_pct       = writeoff_pct
             else:
                 db.add(WasteMetric(
                     restaurant_id=restaurant_id,
                     report_id=None,
                     period=period,
                     revenue_sum=round(rev, 2),
-                    shortage_sum=0.0,
+                    shortage_sum=round(sho, 2),
                     complete_waste_sum=round(wri, 2),
                     shortage_pct=shortage_pct,
                     writeoff_pct=writeoff_pct,
