@@ -672,6 +672,8 @@ export default function DashboardPage() {
   const [refreshingId, setRefreshingId] = useState<number | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const isCurrent = month === currentYM()
+
   const { data, isLoading: loading, refetch } = useQuery<DashboardData>({
     queryKey: ["dashboard", month, selectedWeek],
     queryFn: async () => {
@@ -680,7 +682,7 @@ export default function DashboardPage() {
       const res = await api.get(`/dashboard/?${params}`)
       return res.data
     },
-    staleTime: 2 * 60 * 1000,
+    staleTime: isCurrent ? 2 * 60 * 1000 : Infinity,
   })
 
   // Синхронизируем selectedWeek если сервер вернул другой
@@ -747,7 +749,6 @@ export default function DashboardPage() {
   }, [month])
 
   const isStore = user?.role === "store"
-  const isCurrent = month === currentYM()
   const myMetric = isStore && data ? data.restaurants[0] : null
   // restaurant_id для store берём из профиля пользователя (не из метрик — там может не быть данных)
   const storeRestaurantId = isStore ? user?.restaurants?.[0]?.id : undefined
