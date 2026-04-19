@@ -162,16 +162,7 @@ def build_report_dataframe(
 
     sales_sum_agg     = agg_amount(df_sales,     "Sum.ResignedSum", "SalesSum")      if not df_sales.empty     and "Sum.ResignedSum" in df_sales.columns     else empty_sum("SalesSum")
     writeoff_sum_agg  = agg_amount(df_writeoff,  "Sum.ResignedSum", "WriteOffSum")   if not df_writeoff.empty  and "Sum.ResignedSum" in df_writeoff.columns  else empty_sum("WriteOffSum")
-    # Inventory TRANSACTIONS preset uses Amount as monetary value (no Sum.ResignedSum)
-    if not df_inventory.empty:
-        if "Sum.ResignedSum" in df_inventory.columns:
-            inventory_sum_agg = agg_amount(df_inventory, "Sum.ResignedSum", "InventorySum")
-        elif "Amount" in df_inventory.columns:
-            inventory_sum_agg = agg_amount(df_inventory, "Amount", "InventorySum")
-        else:
-            inventory_sum_agg = empty_sum("InventorySum")
-    else:
-        inventory_sum_agg = empty_sum("InventorySum")
+    inventory_sum_agg = agg_amount(df_inventory, "Sum.ResignedSum", "InventorySum")  if not df_inventory.empty and "Sum.ResignedSum" in df_inventory.columns else empty_sum("InventorySum")
 
     # Мерж как в app.py: стартуем от IIKO данных (outer), потом left join refs_goods
     merged = sales_agg.merge(writeoff_agg,  on="ProductNum", how="outer")

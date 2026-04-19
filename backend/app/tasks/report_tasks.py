@@ -263,39 +263,24 @@ def generate_report_task(self, report_id: int):
         writeoff_pct    = round(writeoff_sum / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
         waste_pct       = round((shortage_sum + writeoff_sum) / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
 
-        # Upsert: обновляем если есть, иначе создаём (не удаляем — сохраняем created_at)
-        from datetime import timezone as _tz
-        existing_metric = db.query(WasteMetric).filter(
+        # Upsert: удаляем старую метрику за тот же период и ресторан
+        db.query(WasteMetric).filter(
             WasteMetric.restaurant_id == restaurant.id,
             WasteMetric.period == report.period,
-        ).first()
-        now = datetime.now(_tz.utc)
-        if existing_metric:
-            existing_metric.revenue_sum        = round(revenue_sum, 2)
-            existing_metric.shortage_sum       = round(shortage_sum, 2)
-            existing_metric.complete_waste_sum = round(writeoff_sum, 2)
-            existing_metric.waste_pct          = waste_pct
-            existing_metric.shortage_pct       = shortage_pct
-            existing_metric.writeoff_pct       = writeoff_pct
-            existing_metric.to_writeoff_qty    = to_writeoff_qty
-            existing_metric.over_limit_count   = over_limit_count
-            existing_metric.report_id          = report_id
-            existing_metric.updated_at         = now
-        else:
-            db.add(WasteMetric(
-                restaurant_id=restaurant.id,
-                period=report.period,
-                revenue_sum=round(revenue_sum, 2),
-                shortage_sum=round(shortage_sum, 2),
-                complete_waste_sum=round(writeoff_sum, 2),
-                waste_pct=waste_pct,
-                shortage_pct=shortage_pct,
-                writeoff_pct=writeoff_pct,
-                to_writeoff_qty=to_writeoff_qty,
-                over_limit_count=over_limit_count,
-                report_id=report_id,
-                updated_at=now,
-            ))
+        ).delete()
+        db.add(WasteMetric(
+            restaurant_id=restaurant.id,
+            period=report.period,
+            revenue_sum=round(revenue_sum, 2),
+            shortage_sum=round(shortage_sum, 2),
+            complete_waste_sum=round(writeoff_sum, 2),
+            waste_pct=waste_pct,
+            shortage_pct=shortage_pct,
+            writeoff_pct=writeoff_pct,
+            to_writeoff_qty=to_writeoff_qty,
+            over_limit_count=over_limit_count,
+            report_id=report_id,
+        ))
         db.commit()
 
         return {"status": "ready", "items_count": len(items)}
@@ -333,9 +318,8 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
         if not restaurant:
             return {"error": "Restaurant not found"}
 
-        revenue_preset   = restaurant.get_preset("revenue_net")
-        waste_preset     = restaurant.get_preset("complete_waste")
-        inventory_preset = restaurant.get_preset("inventory")
+        revenue_preset = restaurant.get_preset("revenue_net")
+        waste_preset = restaurant.get_preset("complete_waste")
         dept = restaurant.department_name or restaurant.name
 
         def filter_by_dept(rows):
@@ -359,7 +343,6 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
 
             revenue_sum = 0.0
             complete_waste_sum = 0.0
-            shortage_sum = 0.0
 
             try:
                 if revenue_preset:
@@ -383,60 +366,51 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                             complete_waste_sum = float(df[col].apply(
                                 lambda x: abs(float(str(x).replace(",", ".")) if x else 0)
                             ).sum())
-
-                if inventory_preset:
-                    raw = fetch_olap(db, restaurant, inventory_preset, iiko_from, iiko_to)
-                    rows = filter_by_dept(raw)
-                    if rows:
-                        df_inv = pd.DataFrame(rows)
-                        amt_col = "Amount"
-                        contr_col = "Contr-Account.Name"
-                        if amt_col in df_inv.columns and contr_col in df_inv.columns:
-                            df_inv[amt_col] = df_inv[amt_col].apply(
-                                lambda x: float(str(x).replace(",", ".")) if x else 0
-                            )
-                            shortage_rows = df_inv[df_inv[contr_col] == "Недостача инвентаризации"]
-                            shortage_sum = float(shortage_rows[amt_col].abs().sum())
-
             except Exception as e:
                 errors.append({"period": period, "error": str(e)})
                 continue
 
-            existing_metric = db.query(WasteMetric).filter(
+            all_existing = db.query(WasteMetric).filter(
                 WasteMetric.restaurant_id == restaurant_id,
                 WasteMetric.period == period,
-            ).first()
+            ).all()
 
+            shortage_sum = 0.0
+            report_row = next((m for m in all_existing if m.report_id is not None), None)
+            if report_row:
+                shortage_sum = float(report_row.shortage_sum or 0)
+
+            for m in all_existing:
+                if m.report_id is None:
+                    db.delete(m)
+            db.flush()
+
+            sho = shortage_sum
             wri = complete_waste_sum
             rev = revenue_sum
-            waste_pct    = round((shortage_sum + wri) / rev * 100, 4) if rev > 0 else 0.0
-            shortage_pct = round(shortage_sum / rev * 100, 4) if rev > 0 else 0.0
+            waste_pct = round((sho + wri) / rev * 100, 4) if rev > 0 else 0.0
+            shortage_pct = round(sho / rev * 100, 4) if rev > 0 else 0.0
             writeoff_pct = round(wri / rev * 100, 4) if rev > 0 else 0.0
 
-            from datetime import timezone as _tz2
-            now2 = _dt.now(_tz2.utc)
-            if existing_metric:
-                existing_metric.revenue_sum        = round(rev, 2)
-                existing_metric.shortage_sum       = round(shortage_sum, 2)
-                existing_metric.complete_waste_sum = round(wri, 2)
-                existing_metric.waste_pct          = waste_pct
-                existing_metric.shortage_pct       = shortage_pct
-                existing_metric.writeoff_pct       = writeoff_pct
-                existing_metric.updated_at         = now2
+            if report_row:
+                report_row.revenue_sum = round(rev, 2)
+                report_row.complete_waste_sum = round(wri, 2)
+                report_row.waste_pct = waste_pct
+                report_row.shortage_pct = shortage_pct
+                report_row.writeoff_pct = writeoff_pct
             else:
                 db.add(WasteMetric(
                     restaurant_id=restaurant_id,
                     report_id=None,
                     period=period,
                     revenue_sum=round(rev, 2),
-                    shortage_sum=round(shortage_sum, 2),
+                    shortage_sum=0.0,
                     complete_waste_sum=round(wri, 2),
                     shortage_pct=shortage_pct,
                     writeoff_pct=writeoff_pct,
                     waste_pct=waste_pct,
                     to_writeoff_qty=0.0,
                     over_limit_count=0,
-                    updated_at=now2,
                 ))
 
             results.append({"period": period, "revenue_sum": round(rev, 2), "waste_pct": waste_pct})
@@ -539,18 +513,17 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
                     lambda x: abs(float(str(x).replace(",", ".")) if x else 0)
                 ).sum())
 
-        # Shortage: строки где Contr-Account.Name = "Недостача инвентаризации"
+        # Shortage из инвентаризации (отрицательные суммы)
         shortage_sum = 0.0
         if inventory_rows:
             df_inv = pd.DataFrame(inventory_rows)
-            amt_col = "Amount"
-            contr_col = "Contr-Account.Name"
-            if amt_col in df_inv.columns and contr_col in df_inv.columns:
-                df_inv[amt_col] = df_inv[amt_col].apply(
+            sum_col = "Sum.ResignedSum"
+            if sum_col in df_inv.columns:
+                df_inv[sum_col] = df_inv[sum_col].apply(
                     lambda x: float(str(x).replace(",", ".")) if x else 0
                 )
-                shortage_rows = df_inv[df_inv[contr_col] == "Недостача инвентаризации"]
-                shortage_sum = float(shortage_rows[amt_col].abs().sum())
+                shortage_sum = float(df_inv[df_inv[sum_col] < 0][sum_col].sum())
+                shortage_sum = abs(shortage_sum)
 
         shortage_pct = round(shortage_sum / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
         writeoff_pct = round(writeoff_sum / revenue_sum * 100, 4) if revenue_sum > 0 else 0.0
@@ -562,8 +535,6 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
             WasteMetric.period == period,
         ).first()
 
-        from datetime import timezone as _tz3
-        now3 = datetime.now(_tz3.utc)
         if existing:
             existing.revenue_sum        = round(revenue_sum, 2)
             existing.shortage_sum       = round(shortage_sum, 2)
@@ -571,7 +542,6 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
             existing.shortage_pct       = shortage_pct
             existing.writeoff_pct       = writeoff_pct
             existing.waste_pct          = waste_pct
-            existing.updated_at         = now3
         else:
             db.add(WasteMetric(
                 restaurant_id=restaurant_id,
@@ -584,7 +554,6 @@ def refresh_metrics_task(self, restaurant_id: int, period: str):
                 waste_pct=waste_pct,
                 to_writeoff_qty=0,
                 over_limit_count=0,
-                updated_at=now3,
             ))
         db.commit()
 

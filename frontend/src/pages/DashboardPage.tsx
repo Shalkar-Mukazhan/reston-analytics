@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import api from "../api/client"
 import { useAuth } from "../hooks/useAuth"
 import {
@@ -665,6 +665,7 @@ function weekLabel(w: string) {
 // ── Главная страница ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { user } = useAuth()
+  const queryClient = useQueryClient()
   const [month, setMonth] = useState(currentYM)
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)

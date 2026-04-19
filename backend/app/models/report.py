@@ -70,9 +70,7 @@ class WasteMetric(Base):
     waste_pct = Column(Float, default=0.0)       # shortage + writeoff combined
     to_writeoff_qty = Column(Float, default=0.0) # позиций к списанию
     over_limit_count = Column(Integer, default=0)
-    created_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
-                         onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     restaurant = relationship("Restaurant", back_populates="metrics")
 

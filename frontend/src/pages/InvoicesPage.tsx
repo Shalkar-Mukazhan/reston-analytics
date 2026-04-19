@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
 import api from "../api/client"
 import type { Restaurant } from "../types"
 import {
@@ -234,26 +233,35 @@ function PostToIikoModal({ invoice, restaurantName, onClose, onDone }: {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function InvoicesPage() {
-  const queryClient = useQueryClient()
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([])
+  const [invoices, setInvoices] = useState<Invoice[]>([])
   const [restaurantId, setRestaurantId] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [loadingInvoices, setLoadingInvoices] = useState(true)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null)
   const [postingInvoice, setPostingInvoice] = useState<Invoice | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const { data: meData } = useQuery({
-    queryKey: ["me"],
-    queryFn: () => api.get("/auth/me").then(r => r.data),
-  })
-  const restaurants: Restaurant[] = meData?.restaurants ?? []
+  useEffect(() => {
+    api.get("/auth/me").then((res) => {
+      setRestaurants(res.data.restaurants)
+      if (res.data.restaurants.length === 1) setRestaurantId(String(res.data.restaurants[0].id))
+    })
+    loadInvoices()
+  }, [])
 
-  const { data: invoices = [], isLoading: loadingInvoices, refetch: loadInvoices } = useQuery<Invoice[]>({
-    queryKey: ["invoices"],
-    queryFn: () => api.get("/invoices/").then(r => r.data),
-  })
+  const loadInvoices = async () => {
+    setLoadingInvoices(true)
+    try {
+      const res = await api.get("/invoices/")
+      setInvoices(res.data)
+    } finally {
+      setLoadingInvoices(false)
+    }
+  }
 
   const upload = async () => {
     if (!file || !restaurantId) return
@@ -270,7 +278,7 @@ export default function InvoicesPage() {
       setSuccess(`Накладная загружена: ${data.items_count} позиций на сумму ${data.total_sum_vat?.toLocaleString("ru-RU") ?? "—"} ₸`)
       setFile(null)
       if (fileRef.current) fileRef.current.value = ""
-      await queryClient.invalidateQueries({ queryKey: ["invoices"] })
+      await loadInvoices()
     } catch (e: any) {
       setError(e.response?.data?.detail || e.message)
     } finally {
@@ -361,7 +369,7 @@ export default function InvoicesPage() {
           </h2>
           <button
             className="btn-secondary text-xs py-1.5 px-3"
-            onClick={() => loadInvoices()}
+            onClick={loadInvoices}
             disabled={loadingInvoices}
           >
             <RefreshCw size={13} className={loadingInvoices ? "animate-spin" : ""} />
