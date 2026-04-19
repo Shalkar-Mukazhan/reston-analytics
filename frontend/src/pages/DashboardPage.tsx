@@ -753,11 +753,11 @@ export default function DashboardPage() {
   // restaurant_id для store берём из профиля пользователя (не из метрик — там может не быть данных)
   const storeRestaurantId = isStore ? user?.restaurants?.[0]?.id : undefined
 
-  // Авто-обновление только для текущего месяца при первой загрузке
+  // Авто-обновление только для текущего месяца при смене месяца
   const refreshedForMonth = useRef<string | null>(null)
   useEffect(() => {
     if (!isCurrent) return
-    if (!data || refreshedForMonth.current === month) return
+    if (refreshedForMonth.current === month) return
     if (isStore && !storeRestaurantId) return
     refreshedForMonth.current = month
     if (isStore) {
@@ -766,7 +766,7 @@ export default function DashboardPage() {
       refreshAll(month)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, month])
+  }, [month])
 
   const handleWeekSelect = (wk: string) => {
     setSelectedWeek(wk)
