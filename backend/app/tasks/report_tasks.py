@@ -333,8 +333,9 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
         if not restaurant:
             return {"error": "Restaurant not found"}
 
-        revenue_preset = restaurant.get_preset("revenue_net")
-        waste_preset = restaurant.get_preset("complete_waste")
+        revenue_preset   = restaurant.get_preset("revenue_net")
+        waste_preset     = restaurant.get_preset("complete_waste")
+        inventory_preset = restaurant.get_preset("inventory")
         dept = restaurant.department_name or restaurant.name
 
         def filter_by_dept(rows):
@@ -358,6 +359,7 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
 
             revenue_sum = 0.0
             complete_waste_sum = 0.0
+            shortage_sum = 0.0
 
             try:
                 if revenue_preset:
@@ -381,6 +383,20 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                             complete_waste_sum = float(df[col].apply(
                                 lambda x: abs(float(str(x).replace(",", ".")) if x else 0)
                             ).sum())
+
+                if inventory_preset:
+                    raw = fetch_olap(db, restaurant, inventory_preset, iiko_from, iiko_to)
+                    rows = filter_by_dept(raw)
+                    if rows:
+                        df_inv = pd.DataFrame(rows)
+                        sum_col = next((c for c in ["Инвентаризация сумма", "Sum", "SumInt"] if c in df_inv.columns), None)
+                        if sum_col:
+                            df_inv[sum_col] = df_inv[sum_col].apply(
+                                lambda x: float(str(x).replace(",", ".")) if x else 0
+                            )
+                            neg = df_inv[df_inv[sum_col] < 0][sum_col].sum()
+                            shortage_sum = abs(float(neg))
+
             except Exception as e:
                 errors.append({"period": period, "error": str(e)})
                 continue
@@ -390,17 +406,17 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                 WasteMetric.period == period,
             ).first()
 
-            sho = float(existing_metric.shortage_sum or 0) if existing_metric else 0.0
             wri = complete_waste_sum
             rev = revenue_sum
-            waste_pct    = round((sho + wri) / rev * 100, 4) if rev > 0 else 0.0
-            shortage_pct = round(sho / rev * 100, 4) if rev > 0 else 0.0
+            waste_pct    = round((shortage_sum + wri) / rev * 100, 4) if rev > 0 else 0.0
+            shortage_pct = round(shortage_sum / rev * 100, 4) if rev > 0 else 0.0
             writeoff_pct = round(wri / rev * 100, 4) if rev > 0 else 0.0
 
             from datetime import timezone as _tz2
             now2 = _dt.now(_tz2.utc)
             if existing_metric:
                 existing_metric.revenue_sum        = round(rev, 2)
+                existing_metric.shortage_sum       = round(shortage_sum, 2)
                 existing_metric.complete_waste_sum = round(wri, 2)
                 existing_metric.waste_pct          = waste_pct
                 existing_metric.shortage_pct       = shortage_pct
@@ -412,7 +428,7 @@ def sync_iiko_analytics_task(self, restaurant_id: int, year: int):
                     report_id=None,
                     period=period,
                     revenue_sum=round(rev, 2),
-                    shortage_sum=0.0,
+                    shortage_sum=round(shortage_sum, 2),
                     complete_waste_sum=round(wri, 2),
                     shortage_pct=shortage_pct,
                     writeoff_pct=writeoff_pct,
