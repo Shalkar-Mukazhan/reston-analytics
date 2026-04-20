@@ -63,6 +63,18 @@ def _save_session(db: Session, restaurant_id: int, key: str) -> None:
     db.commit()
 
 
+def _cache_ttl(date_from: str) -> int:
+    """5 минут для сегодняшних данных, 1 час для прошлых дат."""
+    try:
+        from datetime import timezone, timedelta
+        almaty = timezone(timedelta(hours=5))
+        query_date = datetime.fromisoformat(date_from).date()
+        today = datetime.now(almaty).date()
+        return 300 if query_date >= today else 3600
+    except Exception:
+        return 3600
+
+
 def fetch_olap(db: Session, restaurant, preset_id: str, date_from: str, date_to: str) -> list:
     cache_key = f"olap:{restaurant.id}:{preset_id}:{date_from}:{date_to}"
     rc = _redis()
@@ -90,7 +102,7 @@ def fetch_olap(db: Session, restaurant, preset_id: str, date_from: str, date_to:
 
     if rc:
         try:
-            rc.setex(cache_key, 3600, json.dumps(data))
+            rc.setex(cache_key, _cache_ttl(date_from), json.dumps(data))
         except Exception:
             pass
 
