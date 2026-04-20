@@ -652,11 +652,12 @@ def start_day_sync_task(restaurant_id: int):
     from app.models.restaurant import Restaurant
 
     now_almaty = datetime.now(ALMATY_TZ)
-    business_date = now_almaty.date()
+    business_date = (now_almaty - timedelta(hours=7)).date() if now_almaty.hour < 7 \
+                    else now_almaty.date()
 
     from app.services.telegram import alert_error, alert_ok
-    log.info("=== start-day sync | restaurant_id=%d | %s Almaty ===",
-             restaurant_id, now_almaty.strftime("%H:%M"))
+    log.info("=== start-day sync | restaurant_id=%d | %s Almaty | biz_date=%s ===",
+             restaurant_id, now_almaty.strftime("%H:%M"), business_date)
 
     db = SessionLocal()
     try:
