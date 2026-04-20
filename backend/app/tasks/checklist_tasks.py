@@ -397,7 +397,6 @@ def _sync_restaurant(db, restaurant, sheet_id: str, is_morning: bool, business_d
 
     # Получаем пресеты
     hourly_preset = restaurant.get_preset("Aim with hour")
-    daily_preset  = restaurant.get_preset("sales")
 
     if not hourly_preset:
         p = db.query(PresetDefinition).filter(
@@ -573,18 +572,15 @@ def _sync_restaurant(db, restaurant, sheet_id: str, is_morning: bool, business_d
         except Exception as e:
             log.error("  [%s] факт ошибка: %s", sheet_name, e)
 
-    # Дневной факт → Цели на День
-    if daily_preset:
-        try:
-            daily_rows = fetch_olap(db, restaurant, daily_preset, date_from, date_to)
-            daily_rows = [r for r in daily_rows if r.get("Department") == dept]
-            daily_data = _parse_daily(daily_rows)
-
-            if daily_data["total_gc"] > 0:
+    # Дневной факт → Цели на День (из уже полученных почасовых данных, без лишнего IIKO-запроса)
+    if hours_data:
+        daily_data = _daily_from_hourly(hours_data)
+        if daily_data["total_gc"] > 0:
+            try:
                 ws_daily = spreadsheet.worksheet(DAILY_SHEET)
                 _update_daily(ws_daily, daily_data, DAILY_COL_TODAY)
-        except Exception as e:
-            log.error("%s: дневной факт ошибка: %s", restaurant.name, e)
+            except Exception as e:
+                log.error("%s: дневной факт ошибка: %s", restaurant.name, e)
 
     log.info("%s: синхронизация завершена", restaurant.name)
 
