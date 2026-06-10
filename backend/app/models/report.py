@@ -16,6 +16,7 @@ class Report(Base):
     error_message = Column(String(1000))
     date_from = Column(DateTime(timezone=True))
     date_to = Column(DateTime(timezone=True))
+    writeoff_posted = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     restaurant = relationship("Restaurant", back_populates="reports")

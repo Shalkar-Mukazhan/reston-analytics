@@ -192,7 +192,7 @@ def download_report(
         rate_pct = rates_map.get(grp.id if grp else None, 0.0) or 0.0
         data.append({
             "Ресторан": restaurant.name,
-            "Код товара": prod.product_num if prod else (item.product_num or ""),
+            "Код товара": prod.product_article or prod.product_num if prod else (item.product_num or ""),
             "Наименование": prod.name if prod else (item.product_name or ""),
             "Группа": grp.name if grp else "",
             "Ед. изм.": prod.unit_type if prod else "",
@@ -210,31 +210,95 @@ def download_report(
         })
 
     df = pd.DataFrame(data)
-    # Сортировка как в app.py: Инвентаризация desc, К списанию desc
     df["_inv_abs"] = df["Инвентаризация"].abs()
     df = df.sort_values(by=["_inv_abs", "К списанию"], ascending=[False, False]).drop(columns=["_inv_abs"])
 
-    # К_СПИСАНИЮ: Норма % == 1 (100%) и К списанию > 0
-    df_writeoff = df[(df["К списанию"] > 0) & (df["Норма %"] == 1)].copy()
+    # ── Stat_lost: отрицательная инвентаризация ───────────────────────────────
+    df_lost = df[df["Инвентаризация"] < 0].copy()
+    df_lost_out = df_lost[[
+        "Ресторан", "Наименование", "Ед. изм.",
+        "Реализация", "Реализация сумма",
+        "Уже списано", "Инвентаризация", "Инвентаризация сумма",
+    ]].rename(columns={"Уже списано": "Списание Raw"})
 
-    # СВЕРХ_НОРМЫ: частичная ставка, уже списано > допустимо
-    df_over = df[(df["Норма %"] < 1) & (df["Норма %"] > 0) & (df["Уже списано"] > df["Допустимо"])].copy()
+    # ── Stat_gain: положительная инвентаризация ───────────────────────────────
+    df_gain = df[df["Инвентаризация"] > 0].copy()
+    df_gain_out = df_gain[[
+        "Ресторан", "Наименование", "Ед. изм.",
+        "Реализация", "Реализация сумма",
+        "Уже списано", "Инвентаризация", "Инвентаризация сумма",
+    ]].rename(columns={"Уже списано": "Списание Raw"})
+
+    # ── Сверх нормы: частичная ставка, уже списано > допустимо ───────────────
+    df_over = df[(df["Норма %"] < 100) & (df["Норма %"] > 0) & (df["Уже списано"] > df["Допустимо"])].copy()
     if not df_over.empty:
-        df_over["Превышение кол-во"] = (df_over["Уже списано"] - df_over["Допустимо"]).clip(lower=0)
-        df_over["Превышение %"] = (df_over["Списано % от реализации"] - df_over["Норма %"]).round(2)
+        df_over["Превышение кол"] = (df_over["Уже списано"] - df_over["Допустимо"]).clip(lower=0).round(3)
+        df_over["Превышение сумма"] = df_over.apply(
+            lambda r: round(r["Превышение кол"] / r["Уже списано"] * r["Уже списано сумма"], 2)
+            if r["Уже списано"] > 0 else 0.0, axis=1
+        )
+    df_over_out = df_over[[
+        "Ресторан", "Наименование", "Группа", "Ед. изм.",
+        "Реализация", "Норма %", "Допустимо", "Уже списано",
+        "Списано % от реализации", "Инвентаризация", "Инвентаризация сумма",
+        "Превышение кол", "Превышение сумма",
+    ]].rename(columns={
+        "Уже списано": "Списание Raw",
+        "Норма %": "Норма",
+        "Списано % от реализации": "% от реализации",
+        "Инвентаризация сумма": "Сумма инвентаризации",
+    }) if not df_over.empty else pd.DataFrame()
 
-    # ПРОБЛЕМНЫЕ: нет нормы или нет категории
-    df_problems = df[df["Норма %"] == 0].copy()
+    # ── Запись и стилизация ───────────────────────────────────────────────────
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    SHEET_COLORS = {
+        "Stat_lost":   "C0392B",   # красный  — недостача
+        "Stat_gain":   "1A7A4A",   # зелёный  — излишек
+        "Сверх нормы": "B7770D",   # янтарный — превышение
+    }
+
+    def style_sheet(ws, hex_color: str):
+        hdr_font  = Font(bold=True, color="FFFFFF", size=10)
+        hdr_fill  = PatternFill(start_color=hex_color, end_color=hex_color, fill_type="solid")
+        hdr_align = Alignment(horizontal="center", vertical="center")
+        even_fill = PatternFill(start_color="F5F5F5", end_color="F5F5F5", fill_type="solid")
+
+        for cell in ws[1]:
+            cell.font      = hdr_font
+            cell.fill      = hdr_fill
+            cell.alignment = hdr_align
+        ws.freeze_panes    = "A2"
+        ws.row_dimensions[1].height = 22
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            for cell in row:
+                if isinstance(cell.value, float):
+                    cell.number_format = "#,##0.000"
+                if row_idx % 2 == 0:
+                    cell.fill = even_fill
+
+        for col_idx, col_cells in enumerate(ws.columns, 1):
+            col_letter = get_column_letter(col_idx)
+            header_len = len(str(ws.cell(1, col_idx).value or ""))
+            max_len = max(
+                header_len,
+                max((len(str(c.value)) for c in col_cells[1:] if c.value is not None), default=0),
+            )
+            ws.column_dimensions[col_letter].width = min(max_len + 4, 38)
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="ОТЧЕТ", index=False)
-        if not df_writeoff.empty:
-            df_writeoff.to_excel(writer, sheet_name="К_СПИСАНИЮ", index=False)
-        if not df_over.empty:
-            df_over.to_excel(writer, sheet_name="СВЕРХ_НОРМЫ", index=False)
-        if not df_problems.empty:
-            df_problems.to_excel(writer, sheet_name="ПРОБЛЕМНЫЕ", index=False)
+        df_lost_out.to_excel(writer, sheet_name="Stat_lost",   index=False)
+        df_gain_out.to_excel(writer, sheet_name="Stat_gain",   index=False)
+        if not df_over_out.empty:
+            df_over_out.to_excel(writer, sheet_name="Сверх нормы", index=False)
+
+        for sheet_name, color in SHEET_COLORS.items():
+            if sheet_name in writer.sheets:
+                style_sheet(writer.sheets[sheet_name], color)
+
     buf.seek(0)
 
     filename = f"report_{restaurant.code}_{report.period}.xlsx"
@@ -363,6 +427,9 @@ def post_writeoff_from_report(
             else:
                 errors.append({"account": account_iiko_id, "error": err_str})
 
+    if results:
+        report.writeoff_posted = True
+
     db.add(AuditLog(
         user_id=current_user.id,
         restaurant_id=restaurant.id,
@@ -489,6 +556,33 @@ def recalc_metrics(
     }
 
 
+@router.delete("/{report_id}")
+def delete_report(
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Отчёт не найден")
+
+    if current_user.role != "co":
+        allowed_ids = [r.id for r in current_user.restaurants]
+        if report.restaurant_id not in allowed_ids:
+            raise HTTPException(status_code=403, detail="Нет доступа")
+
+    db.query(ReportItem).filter(ReportItem.report_id == report_id).delete()
+    db.delete(report)
+    db.add(AuditLog(
+        user_id=current_user.id,
+        restaurant_id=report.restaurant_id,
+        action="delete_report",
+        details=f"report_id={report_id}, period={report.period}",
+    ))
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/")
 def list_reports(
     restaurant_id: int = None,
@@ -509,6 +603,7 @@ def list_reports(
             "restaurant_id": r.restaurant_id,
             "period": r.period,
             "status": r.status,
+            "writeoff_posted": r.writeoff_posted or False,
             "created_at": r.created_at,
         }
         for r in reports

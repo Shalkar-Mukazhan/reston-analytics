@@ -13,7 +13,7 @@ from typing import Optional, List
 
 from app.core.database import get_db
 from app.core.security import require_co, hash_password
-from app.models.catalog import AblProduct, ProductCatalog, ProductGroup, WasteRate, Supplier
+from app.models.catalog import AblProduct, ProductCatalog, ProductGroup, WasteRate, Supplier, SupplierProductMapping
 from app.models.restaurant import PresetDefinition, Restaurant, restaurant_presets
 from app.models.user import User
 from app.services.iiko import get_session_key
@@ -182,10 +182,12 @@ def _restaurant_dict(r: Restaurant) -> dict:
         "store_id": r.store_id,
         "is_active": r.is_active,
         "feat_invoices":  r.feat_invoices  if r.feat_invoices  is not None else True,
+        "feat_invoices2": r.feat_invoices2 if r.feat_invoices2 is not None else True,
         "feat_analytics": r.feat_analytics if r.feat_analytics is not None else True,
         "feat_reports":   r.feat_reports   if r.feat_reports   is not None else True,
         "feat_planning":  r.feat_planning  if r.feat_planning  is not None else True,
         "feat_checklist": r.feat_checklist if r.feat_checklist is not None else True,
+        "feat_about":     r.feat_about     if r.feat_about     is not None else True,
         "google_sheet_url": r.google_sheet_url,
         "checklist_start_hour": r.checklist_start_hour if r.checklist_start_hour is not None else 7,
         "presets": [
@@ -279,10 +281,12 @@ def update_restaurant(
 
 class UpdateFeaturesRequest(BaseModel):
     feat_invoices:  Optional[bool] = None
+    feat_invoices2: Optional[bool] = None
     feat_analytics: Optional[bool] = None
     feat_reports:   Optional[bool] = None
     feat_planning:  Optional[bool] = None
     feat_checklist: Optional[bool] = None
+    feat_about:     Optional[bool] = None
 
 
 @router.patch("/restaurants/{restaurant_id}/features")
@@ -297,19 +301,23 @@ def update_restaurant_features(
     if not restaurant:
         raise HTTPException(status_code=404, detail="Ресторан не найден")
     if body.feat_invoices  is not None: restaurant.feat_invoices  = body.feat_invoices
+    if body.feat_invoices2 is not None: restaurant.feat_invoices2 = body.feat_invoices2
     if body.feat_analytics is not None: restaurant.feat_analytics = body.feat_analytics
     if body.feat_reports   is not None: restaurant.feat_reports   = body.feat_reports
     if body.feat_planning  is not None: restaurant.feat_planning  = body.feat_planning
     if body.feat_checklist is not None: restaurant.feat_checklist = body.feat_checklist
+    if body.feat_about     is not None: restaurant.feat_about     = body.feat_about
     db.commit()
     return {
-        "id":            restaurant.id,
-        "name":          restaurant.name,
+        "id":             restaurant.id,
+        "name":           restaurant.name,
         "feat_invoices":  restaurant.feat_invoices,
+        "feat_invoices2": restaurant.feat_invoices2,
         "feat_analytics": restaurant.feat_analytics,
         "feat_reports":   restaurant.feat_reports,
         "feat_planning":  restaurant.feat_planning,
         "feat_checklist": restaurant.feat_checklist,
+        "feat_about":     restaurant.feat_about,
     }
 
 
@@ -551,6 +559,41 @@ def test_iiko_connection(
         return {"ok": False, "error": str(e)}
 
 
+@router.get("/iiko/departments/{restaurant_id}")
+def get_iiko_departments(
+    restaurant_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_co),
+):
+    """Возвращает уникальные значения Department из IIKO OLAP — для настройки department_name."""
+    from app.services.iiko import fetch_olap
+    from datetime import date, timedelta
+
+    restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
+    if not restaurant:
+        raise HTTPException(404, "Ресторан не найден")
+
+    preset_uuid = (
+        restaurant.get_preset("Aim with hour")
+        or restaurant.get_preset("sales")
+        or (restaurant.presets[0].preset_uuid if restaurant.presets else None)
+    )
+    if not preset_uuid:
+        raise HTTPException(400, "У ресторана нет настроенных пресетов OLAP — добавьте хотя бы один")
+
+    today = date.today()
+    date_from = (today - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00")
+    date_to = today.strftime("%Y-%m-%dT00:00:00")
+
+    try:
+        rows = fetch_olap(db, restaurant, preset_uuid, date_from, date_to)
+    except Exception as e:
+        raise HTTPException(502, f"Ошибка подключения к IIKO: {e}")
+
+    departments = sorted({r.get("Department", "") for r in rows if r.get("Department")})
+    return {"departments": departments}
+
+
 # ════════════════════════════════════════════════════════════════
 # СПРАВОЧНИК ТОВАРОВ (product_catalog)
 # ════════════════════════════════════════════════════════════════
@@ -568,7 +611,14 @@ def list_product_catalog(
         ProductGroup, ProductCatalog.group_id == ProductGroup.id
     )
     if filter == "no_group":
-        query = query.filter(ProductCatalog.group_id == None)
+        from app.models.catalog import ProductGroup as PG
+        unmapped = db.query(PG).filter(PG.name == "UNMAPPED").first()
+        if unmapped:
+            query = query.filter(
+                (ProductCatalog.group_id == None) | (ProductCatalog.group_id == unmapped.id)
+            )
+        else:
+            query = query.filter(ProductCatalog.group_id == None)
     elif filter == "deleted":
         query = query.filter(ProductCatalog.is_deleted == True)
     elif filter == "no_iiko_id":
@@ -584,8 +634,14 @@ def list_product_catalog(
     total = query.count()
     rows = query.order_by(ProductCatalog.product_num).offset(offset).limit(limit).all()
 
+    from app.models.catalog import ProductGroup as PG
+    _unmapped = db.query(PG).filter(PG.name == "UNMAPPED").first()
+    _unmapped_id = _unmapped.id if _unmapped else None
     total_all   = db.query(ProductCatalog).count()
-    no_group    = db.query(ProductCatalog).filter(ProductCatalog.group_id == None).count()
+    no_group    = db.query(ProductCatalog).filter(
+        (ProductCatalog.group_id == None) | (ProductCatalog.group_id == _unmapped_id)
+        if _unmapped_id else ProductCatalog.group_id == None
+    ).count()
     deleted_cnt = db.query(ProductCatalog).filter(ProductCatalog.is_deleted == True).count()
 
     return {
@@ -641,26 +697,99 @@ def sync_suppliers(
     root = ET.fromstring(r.text)
     added, updated = 0, 0
     for emp in root.findall("employee"):
-        iiko_uuid = (emp.findtext("id") or "").strip()
-        name      = (emp.findtext("name") or "").strip()
+        iiko_uuid   = (emp.findtext("id")               or "").strip()
+        name        = (emp.findtext("name")             or "").strip()
+        iiko_code   = (emp.findtext("code")             or "").strip() or None
+        taxpayer_id = (emp.findtext("taxpayerIdNumber") or "").strip() or None
         if not iiko_uuid or not name:
             continue
         existing = db.query(Supplier).filter(Supplier.iiko_uuid == iiko_uuid).first()
         if existing:
-            existing.name = name
+            existing.name        = name
+            existing.iiko_code   = iiko_code
+            existing.taxpayer_id = taxpayer_id
             updated += 1
         else:
-            db.add(Supplier(iiko_uuid=iiko_uuid, name=name))
+            db.add(Supplier(iiko_uuid=iiko_uuid, name=name, iiko_code=iiko_code, taxpayer_id=taxpayer_id))
             added += 1
 
     db.commit()
     return {"added": added, "updated": updated}
 
 
+@router.post("/iiko/sync-pricelist/{restaurant_id}")
+def sync_supplier_pricelist(
+    restaurant_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_co),
+):
+    """
+    Загружает прайс-листы поставщиков из iiko → таблица supplier_product_mappings.
+    Маппинг: код товара у поставщика → UUID товара в iiko.
+    Используется для авто-сопоставления позиций OCR-накладных.
+    """
+    restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Ресторан не найден")
+
+    key = get_session_key(db, restaurant)
+    suppliers = db.query(Supplier).filter(Supplier.iiko_code.isnot(None)).all()
+
+    total_added = total_updated = 0
+    errors = []
+
+    for supplier in suppliers:
+        try:
+            r = requests.get(
+                f"{restaurant.base_url}/resto/api/suppliers/{supplier.iiko_code}/pricelist",
+                params={"key": key},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                errors.append(f"{supplier.name}: HTTP {r.status_code}")
+                continue
+
+            root = ET.fromstring(r.text)
+            for item in root.findall("supplierPriceListItemDto"):
+                iiko_product_id   = (item.findtext("nativeProduct")      or "").strip()
+                iiko_product_name = (item.findtext("nativeProductName")  or "").strip()
+                sup_code          = (item.findtext("supplierProductCode") or "").strip() or None
+                sup_name          = (item.findtext("supplierProductName") or "").strip() or None
+
+                if not iiko_product_id or not sup_code:
+                    continue
+
+                existing = db.query(SupplierProductMapping).filter(
+                    SupplierProductMapping.supplier_id == supplier.id,
+                    SupplierProductMapping.supplier_product_code == sup_code,
+                ).first()
+
+                if existing:
+                    existing.iiko_product_id   = iiko_product_id
+                    existing.iiko_product_name = iiko_product_name
+                    existing.supplier_product_name = sup_name
+                    total_updated += 1
+                else:
+                    db.add(SupplierProductMapping(
+                        supplier_id=supplier.id,
+                        supplier_product_code=sup_code,
+                        supplier_product_name=sup_name,
+                        iiko_product_id=iiko_product_id,
+                        iiko_product_name=iiko_product_name,
+                    ))
+                    total_added += 1
+
+        except Exception as e:
+            errors.append(f"{supplier.name}: {e}")
+
+    db.commit()
+    return {"added": total_added, "updated": total_updated, "errors": errors[:10]}
+
+
 @router.get("/suppliers")
 def list_suppliers(db: Session = Depends(get_db), _=Depends(require_co)):
     return [
-        {"id": s.id, "iiko_uuid": s.iiko_uuid, "name": s.name}
+        {"id": s.id, "iiko_uuid": s.iiko_uuid, "iiko_code": s.iiko_code, "name": s.name, "taxpayer_id": s.taxpayer_id}
         for s in db.query(Supplier).order_by(Supplier.name).all()
     ]
 
@@ -736,8 +865,10 @@ async def upload_mapping_abl(
             detail=f"Не найдены колонки: {missing}. Колонки файла: {df.columns.tolist()}",
         )
 
-    product_num_map = {p.product_num: p.id for p in db.query(ProductCatalog).all()}
-    existing_map    = {p.abl_article: p for p in db.query(AblProduct).all()}
+    all_catalog = db.query(ProductCatalog).all()
+    product_article_map = {p.product_article: p.id for p in all_catalog if p.product_article}
+    product_num_map     = {p.product_num: p.id for p in all_catalog}
+    existing_map        = {p.abl_article: p for p in db.query(AblProduct).all()}
 
     added = updated = skipped = 0
     for _, row in df.iterrows():
@@ -748,6 +879,8 @@ async def upload_mapping_abl(
 
         main_art = str(row.get("Основной артикул ABL", "")).strip()
         iiko_art = str(row.get("Артикул айко", "")).strip()
+        if iiko_art == "nan":
+            iiko_art = ""
         name     = str(row.get("Наименование", "")).strip()
         supplier = str(row.get("Поставщик", "")).strip() if "Поставщик" in df.columns else ""
 
@@ -759,11 +892,13 @@ async def upload_mapping_abl(
 
         price     = _f("Цена продажи")
         price_vat = _f("Цена продажи с НДС")
-        product_catalog_id = product_num_map.get(iiko_art)
+        # Ищем сначала по product_article, потом по product_num
+        product_catalog_id = product_article_map.get(iiko_art) or product_num_map.get(iiko_art) if iiko_art else None
 
         existing = existing_map.get(abl_art)
         if existing:
             existing.abl_main_article   = main_art
+            existing.iiko_article       = iiko_art or existing.iiko_article
             existing.name               = name
             existing.supplier           = supplier or existing.supplier
             existing.price              = price if price is not None else existing.price
@@ -773,6 +908,7 @@ async def upload_mapping_abl(
         else:
             db.add(AblProduct(
                 abl_article=abl_art, abl_main_article=main_art,
+                iiko_article=iiko_art or None,
                 name=name, supplier=supplier,
                 price=price, price_vat=price_vat,
                 product_catalog_id=product_catalog_id,
@@ -876,14 +1012,32 @@ def sync_catalog_from_iiko(
     unmapped_group = db.query(PG).filter(PG.name == "UNMAPPED").first()
     unmapped_group_id = unmapped_group.id if unmapped_group else None
 
-    # IIKO v2 endpoint — includeDeleted:true чтобы получить и удалённые товары
-    r = requests.get(
-        f"{restaurant.base_url}/resto/api/v2/entities/products/list",
-        params={"key": key, "includeDeleted": "true"},
-        timeout=120,
-    )
-    r.raise_for_status()
-    products = r.json()
+    # IIKO v2 endpoint — запрашиваем страницами, но некоторые серверы игнорируют pageSize
+    # и возвращают все товары сразу. Останавливаемся если батч повторяется.
+    products = []
+    seen_ids: set = set()
+    page = 0
+    page_size = 1000
+    while True:
+        r = requests.get(
+            f"{restaurant.base_url}/resto/api/v2/entities/products/list",
+            params={"key": key, "includeDeleted": "true", "pageSize": page_size, "pageNumber": page},
+            timeout=120,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        if not batch:
+            break
+        # Если все ID из батча уже видели — сервер не поддерживает пагинацию
+        batch_ids = {p.get("id") for p in batch if p.get("id")}
+        if batch_ids and batch_ids.issubset(seen_ids):
+            break
+        new_items = [p for p in batch if p.get("id") not in seen_ids]
+        products.extend(new_items)
+        seen_ids.update(batch_ids)
+        if len(batch) < page_size:
+            break
+        page += 1
 
     existing_map = {p.product_iiko_id: p for p in db.query(ProductCatalog).all()}
 
@@ -922,10 +1076,19 @@ def sync_catalog_from_iiko(
                 unit_type = main_unit
         unit_type = unit_type[:100] if unit_type else ""
 
+        # Контейнеры/фасовки — только активные
+        raw_containers = prod.get("containers") or []
+        containers = [
+            {"id": c["id"], "name": c.get("name", ""), "count": c.get("count", 1)}
+            for c in raw_containers
+            if not c.get("deleted", False) and c.get("id")
+        ] or None
+
         existing = existing_map.get(iiko_id)
         if existing:
             existing.name       = name
             existing.is_deleted = is_deleted
+            existing.containers = containers
             if code:    existing.product_num     = code
             if article: existing.product_article = article
             if unit_type: existing.unit_type     = unit_type
@@ -936,8 +1099,9 @@ def sync_catalog_from_iiko(
                 product_num=code or iiko_id[:8],
                 product_article=article or None,
                 name=name,
-                group_id=unmapped_group_id,   # UNMAPPED вместо NULL
+                group_id=unmapped_group_id,
                 unit_type=unit_type or None,
+                containers=containers,
                 is_deleted=is_deleted,
             ))
             added += 1
@@ -1169,3 +1333,28 @@ def assign_presets_to_restaurant(
     r.presets = presets
     db.commit()
     return {"restaurant_id": restaurant_id, "preset_ids": [p.id for p in presets]}
+
+
+# ════════════════════════════════════════════════════════════════
+# СИСТЕМНЫЕ НАСТРОЙКИ
+# ════════════════════════════════════════════════════════════════
+
+from sqlalchemy import text as sa_text
+
+class SystemSettingPatch(BaseModel):
+    value: str
+
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_db), _=Depends(require_co)):
+    rows = db.execute(sa_text("SELECT key, value FROM system_settings")).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+@router.patch("/settings/{key}")
+def patch_setting(key: str, body: SystemSettingPatch, db: Session = Depends(get_db), _=Depends(require_co)):
+    exists = db.execute(sa_text("SELECT 1 FROM system_settings WHERE key=:k"), {"k": key}).fetchone()
+    if exists:
+        db.execute(sa_text("UPDATE system_settings SET value=:v WHERE key=:k"), {"v": body.value, "k": key})
+    else:
+        db.execute(sa_text("INSERT INTO system_settings (key, value) VALUES (:k, :v)"), {"k": key, "v": body.value})
+    db.commit()
+    return {"key": key, "value": body.value}

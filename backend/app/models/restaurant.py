@@ -43,10 +43,12 @@ class Restaurant(Base):
 
     # Feature flags — управляются из Admin > Доступ (только ЦО)
     feat_invoices  = Column(Boolean, nullable=False, default=True)
+    feat_invoices2 = Column(Boolean, nullable=False, default=True)
     feat_analytics = Column(Boolean, nullable=False, default=True)
     feat_reports   = Column(Boolean, nullable=False, default=True)
     feat_planning  = Column(Boolean, nullable=False, default=True)
     feat_checklist = Column(Boolean, nullable=False, default=True)
+    feat_about     = Column(Boolean, nullable=False, default=True)
 
     # Google Sheets — ссылка на таблицу ресторана (iiko_sync.py)
     google_sheet_url = Column(String(500), nullable=True)

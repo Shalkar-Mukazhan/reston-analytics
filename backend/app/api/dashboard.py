@@ -233,37 +233,71 @@ def get_dashboard(
             for p in sparkline_periods
         ]
 
-    # ── Топ-5 проблемных продуктов за период ──────────────────────────────────
+    # ── Топ-5 минус / топ-5 плюс по инвентаризации за период ────────────────
     period_filter = selected_week if using_weeks and selected_week else month
-    top_products = []
+    top_shortage: list[dict] = []
+    top_surplus:  list[dict] = []
     if rest_ids:
-        top_q = (
+        base_filter = [
+            Report.restaurant_id.in_(rest_ids),
+            Report.status == "ready",
+            Report.period == period_filter,
+            ReportItem.product_name.isnot(None),
+        ]
+
+        def _top_inv(sign: str, limit_order) -> list[dict]:
+            q = (
+                db.query(
+                    ReportItem.product_name,
+                    func.sum(ReportItem.inventory_qty).label("total_inv"),
+                    func.count(func.distinct(Report.restaurant_id)).label("rest_count"),
+                )
+                .join(Report, ReportItem.report_id == Report.id)
+                .filter(*base_filter, ReportItem.inventory_qty < 0 if sign == "-" else ReportItem.inventory_qty > 0)
+                .group_by(ReportItem.product_name)
+                .order_by(limit_order)
+                .limit(5)
+                .all()
+            )
+            return [
+                {
+                    "product_name": r.product_name,
+                    "total_inv": round(float(r.total_inv or 0), 3),
+                    "restaurant_count": r.rest_count,
+                }
+                for r in q
+            ]
+
+        top_shortage = _top_inv("-", func.sum(ReportItem.inventory_qty).asc())
+        top_surplus  = _top_inv("+", func.sum(ReportItem.inventory_qty).desc())
+
+        # Топ-5 сверх нормы — продукты с наибольшим кол-вом ресторанов где is_over_limit
+        over_q = (
             db.query(
                 ReportItem.product_name,
-                func.sum(ReportItem.to_writeoff_qty).label("total_to_writeoff"),
+                func.sum(ReportItem.writeoff_qty - ReportItem.allowed_qty).label("total_inv"),
                 func.count(func.distinct(Report.restaurant_id)).label("rest_count"),
             )
             .join(Report, ReportItem.report_id == Report.id)
             .filter(
-                Report.restaurant_id.in_(rest_ids),
-                Report.status == "ready",
-                Report.period == period_filter,
+                *base_filter,
                 ReportItem.is_over_limit == True,
-                ReportItem.product_name.isnot(None),
             )
             .group_by(ReportItem.product_name)
-            .order_by(func.sum(ReportItem.to_writeoff_qty).desc())
+            .order_by(func.count(func.distinct(Report.restaurant_id)).desc())
             .limit(5)
             .all()
         )
-        top_products = [
+        top_over_limit: list[dict] = [
             {
                 "product_name": r.product_name,
-                "total_to_writeoff": round(float(r.total_to_writeoff or 0), 3),
+                "total_inv": round(float(r.total_inv or 0), 3),
                 "restaurant_count": r.rest_count,
             }
-            for r in top_q
+            for r in over_q
         ]
+    else:
+        top_over_limit = []
 
     # ── Отчёты за выбранный период ────────────────────────────────────────────
     recent_reports = (
@@ -297,7 +331,9 @@ def get_dashboard(
             "total_over_limit": total_over_limit,
         },
         "restaurants": restaurant_metrics,
-        "top_products": top_products,
+        "top_shortage": top_shortage,
+        "top_surplus": top_surplus,
+        "top_over_limit": top_over_limit,
         "recent_reports": [
             {
                 "id": r.id,

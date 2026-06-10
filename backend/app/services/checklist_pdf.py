@@ -191,27 +191,18 @@ def generate_checklist_pdf(
     story.append(prog_table)
     story.append(Spacer(1, 2*mm))
 
-    # Полоска прогресса (два столбца: заполненная часть + остаток)
-    bar_full  = 17*cm
-    bar_done  = bar_full * pct / 100
+    # Полоска прогресса
+    bar_full = 17*cm
+    bar_done = bar_full * pct / 100
     bar_color = C_DONE if pct >= 80 else (C_YELLOW if pct >= 50 else C_UNDONE)
-    if pct == 0:
-        bar = Table([[""]], colWidths=[bar_full], rowHeights=[6])
-        bar.setStyle(TableStyle([("BACKGROUND", (0,0), (0,0), C_LIGHT_GRAY)]))
-    elif pct == 100:
-        bar = Table([[""]], colWidths=[bar_full], rowHeights=[6])
-        bar.setStyle(TableStyle([("BACKGROUND", (0,0), (0,0), bar_color)]))
-    else:
-        bar = Table([["", ""]], colWidths=[bar_done, bar_full - bar_done], rowHeights=[6])
-        bar.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (0,0), bar_color),
-            ("BACKGROUND", (1,0), (1,0), C_LIGHT_GRAY),
-            ("TOPPADDING",    (0,0), (-1,-1), 0),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 0),
-            ("LEFTPADDING",   (0,0), (-1,-1), 0),
-            ("RIGHTPADDING",  (0,0), (-1,-1), 0),
-        ]))
-    story.append(bar)
+    bar_data = [[""]]
+    bar_bg = Table(bar_data, colWidths=[bar_full], rowHeights=[4])
+    bar_bg.setStyle(TableStyle([("BACKGROUND", (0,0), (0,0), C_LIGHT_GRAY)]))
+    story.append(bar_bg)
+    if bar_done > 0:
+        bar_fg = Table(bar_data, colWidths=[bar_done], rowHeights=[4])
+        bar_fg.setStyle(TableStyle([("BACKGROUND", (0,0), (0,0), bar_color)]))
+        # Not possible to overlap tables directly — skip visual bar, show text instead
     story.append(Spacer(1, 4*mm))
 
     # ── Секции чеклиста ───────────────────────────────────────────────────────
@@ -394,12 +385,5 @@ def generate_checklist_pdf(
         st["footer"]
     ))
 
-    def _add_page_number(canvas, doc):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(C_GRAY)
-        canvas.drawRightString(A4[0] - 1.5*cm, 0.8*cm, f"Страница {doc.page}")
-        canvas.restoreState()
-
-    doc.build(story, onFirstPage=_add_page_number, onLaterPages=_add_page_number)
+    doc.build(story)
     return buf.getvalue()

@@ -20,3 +20,6 @@ reportlab
 gspread==6.1.2
 google-auth==2.29.0
 sentry-sdk[fastapi]==2.8.0
+tenacity==8.3.0
+slowapi==0.1.9
+anthropic>=0.50.0

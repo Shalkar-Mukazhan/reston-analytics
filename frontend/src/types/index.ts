@@ -3,6 +3,7 @@ export interface User {
   username: string
   role: 'store' | 'co' | 'admin'
   restaurants: Restaurant[]
+  settings?: Record<string, string>
 }
 
 export interface Restaurant {
@@ -11,10 +12,12 @@ export interface Restaurant {
   name: string
   is_active?: boolean
   feat_invoices?: boolean
+  feat_invoices2?: boolean
   feat_analytics?: boolean
   feat_reports?: boolean
   feat_planning?: boolean
   feat_checklist?: boolean
+  feat_about?: boolean
   google_sheet_url?: string | null
 }
 
@@ -24,6 +27,7 @@ export interface Report {
   period: string
   period_type: string
   status: 'pending' | 'in_progress' | 'ready' | 'error'
+  writeoff_posted: boolean
   created_at: string
 }
 

@@ -2,9 +2,14 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
+import CoLoginPage from './pages/co/CoLoginPage'
+import CoAdminPage from './pages/co/CoAdminPage'
+import CoInvoicesPage from './pages/co/CoInvoicesPage'
+import CoWriteoffPage from './pages/co/CoWriteoffPage'
 import DashboardPage from './pages/DashboardPage'
 import ReportsPage from './pages/ReportsPage'
 import InvoicesPage from './pages/InvoicesPage'
+import Invoices2Page from './pages/Invoices2Page'
 import AdminPage from './pages/AdminPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import PlanningPage from './pages/PlanningPage'
@@ -43,6 +48,7 @@ export default function App() {
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="invoices" element={<InvoicesPage />} />
+          <Route path="invoices2" element={<Invoices2Page />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="planning" element={<PlanningPage />} />
           <Route path="checklist" element={<ChecklistPage />} />
@@ -56,6 +62,12 @@ export default function App() {
             }
           />
         </Route>
+        {/* Coffee Original */}
+        <Route path="/co/login" element={<CoLoginPage />} />
+        <Route path="/co/admin" element={<CoAdminPage />} />
+        <Route path="/co/invoices" element={<CoInvoicesPage />} />
+        <Route path="/co/writeoffs" element={<CoWriteoffPage />} />
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

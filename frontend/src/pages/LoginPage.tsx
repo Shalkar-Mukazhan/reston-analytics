@@ -1,6 +1,7 @@
 import { useState, FormEvent } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../hooks/useAuth"
+import coApi from "../api/coClient"
 import { Loader2 } from "lucide-react"
 
 export default function LoginPage() {
@@ -16,10 +17,24 @@ export default function LoginPage() {
     setError("")
     setLoading(true)
     try {
+      // Сначала пробуем reston
       await login(username, password)
       navigate("/dashboard")
     } catch {
-      setError("Неверный логин или пароль")
+      // Если не нашли — пробуем coffee_original
+      try {
+        const form = new URLSearchParams()
+        form.append("username", username.trim().toLowerCase())
+        form.append("password", password)
+        const { data } = await coApi.post("/auth/login", form.toString(), {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        })
+        localStorage.setItem("co_access_token", data.access_token)
+        localStorage.setItem("co_refresh_token", data.refresh_token)
+        navigate(data.role === "admin" ? "/co/admin" : "/co/invoices")
+      } catch {
+        setError("Неверный логин или пароль")
+      }
     } finally {
       setLoading(false)
     }
@@ -38,8 +53,8 @@ export default function LoginPage() {
         <div className="card p-8 shadow-xl">
           {/* Logo */}
           <div className="flex flex-col items-center mb-8">
-            <img src="/forwhite.png" alt="Reston Analytics" className="h-16 w-auto mb-4" />
-            <h1 className="text-2xl font-bold text-brand-dark">Reston Analytics</h1>
+            <img src="/forwhite.png" alt="RestOn Analytics" className="h-16 w-auto mb-4" />
+            <h1 className="text-2xl font-bold text-brand-dark">RestOn Analytics</h1>
             <p className="text-brand-muted text-sm mt-1">Аналитика и контроль ресторанов</p>
           </div>
 
@@ -96,7 +111,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-brand-muted text-xs mt-6">
-          © 2026 Reston Analytics
+          © 2026 RestOn Analytics
         </p>
       </div>
     </div>

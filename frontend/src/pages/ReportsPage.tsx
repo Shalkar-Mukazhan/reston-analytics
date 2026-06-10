@@ -3,9 +3,16 @@ import api from "../api/client"
 import type { Restaurant, Report } from "../types"
 import {
   FileText, Download, RefreshCw, Play, ChevronRight,
-  Loader2, AlertCircle, CheckCircle2, Clock, X, Send,
+  Loader2, AlertCircle, CheckCircle2, Clock, X, Send, Trash2,
 } from "lucide-react"
 import { cn } from "../lib/utils"
+
+function fmtPeriod(period: string): string {
+  const wMatch = period.match(/^(\d{4}-\d{2})-W(\d+)$/)
+  if (wMatch) return `${wMatch[1]} неделя ${wMatch[2]}`
+  if (/^\d{4}-\d{2}$/.test(period)) return `${period} месяц`
+  return period
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,22 +70,15 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function ItemStatusBadge({ status }: { status: string }) {
-  if (status === "ok") return <span className="badge-ok">В норме</span>
-  if (status === "over_limit") return <span className="badge-over">Сверх нормы</span>
-  if (status === "no_rate") return <span className="badge-warn">Нет нормы</span>
-  if (status === "no_writeoff_needed") return <span className="badge-muted">Без списания</span>
-  return <span className="badge-muted">{status}</span>
-}
-
 // ── Items modal ───────────────────────────────────────────────────────────────
 
-function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose: () => void }) {
+
+function ItemsModal({ report, onClose, onPosted }: { report: ReportWithRestaurant; onClose: () => void; onPosted: (id: number) => void }) {
   const [items, setItems] = useState<ReportItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<string>("all")
   const [posting, setPosting] = useState(false)
   const [postResult, setPostResult] = useState<{ ok?: string; error?: string } | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   useEffect(() => {
     api.get(`/reports/${report.id}/items`).then((res) => {
@@ -87,23 +87,14 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
     })
   }, [report.id])
 
-  // Все позиции, отсортированные по инвентаризации (минус сначала)
-  const allSorted = [...items].sort((a, b) => (a.inventory_qty ?? 0) - (b.inventory_qty ?? 0))
-  // Только с минусом — для вкладок "Сверх нормы" и "Проблемные"
-  const withMinus = allSorted.filter((i) => i.inventory_qty < 0)
-
-  const filtered =
-    filter === "all"        ? allSorted :
-    filter === "over_limit" ? withMinus.filter((i) => i.status === "over_limit") :
-    filter === "problems"   ? withMinus.filter((i) => i.status === "no_rate" || i.status === "needs_check") :
-    filter === "to_writeoff"? items.filter((i) => (i.rate_pct ?? 0) === 100 && (i.to_writeoff_qty ?? 0) > 0) :
-    allSorted
-
-  const overCount = withMinus.filter((i) => i.status === "over_limit").length
-  const problemsCount = withMinus.filter((i) => i.status === "no_rate" || i.status === "needs_check").length
-  const toWriteoffCount = items.filter((i) => (i.rate_pct ?? 0) === 100 && (i.to_writeoff_qty ?? 0) > 0).length
+  const overCount      = items.filter((i) => i.status === "over_limit").length
+  const toWriteoffItems = items.filter((i) => (i.rate_pct ?? 0) === 100 && (i.to_writeoff_qty ?? 0) > 0)
+  const toWriteoffCount = toWriteoffItems.length
+  const toWriteoffQty   = toWriteoffItems.reduce((s, i) => s + (i.to_writeoff_qty ?? 0), 0)
+  const okCount        = items.filter((i) => i.status === "ok").length
 
   const postWriteoff = async () => {
+    setConfirmOpen(false)
     setPosting(true)
     setPostResult(null)
     try {
@@ -116,6 +107,7 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
         setPostResult({ error: data.errors[0]?.error || "Ошибка отправки" })
       } else {
         setPostResult({ ok: `Отправлено документов: ${data.docs_sent}${data.errors?.length ? `, ошибок: ${data.errors.length}` : ""}` })
+        onPosted(report.id)
       }
     } catch (e: any) {
       setPostResult({ error: e.response?.data?.detail || e.message })
@@ -127,29 +119,25 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-brand-border">
           <div>
             <h2 className="font-bold text-brand-dark text-lg">
-              Позиции отчёта #{report.id}
+              {report.restaurant_name ?? `Ресторан #${report.restaurant_id}`}
             </h2>
-            <p className="text-brand-muted text-sm mt-0.5">
-              {report.restaurant_name ?? `Ресторан #${report.restaurant_id}`} · {report.period}
-            </p>
+            <p className="text-brand-muted text-sm mt-0.5">{fmtPeriod(report.period)}</p>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-brand-muted">
-              <span className="text-brand-red font-semibold">{overCount}</span> сверх нормы ·{" "}
-              <span className="text-brand-yellow font-semibold">{toWriteoffCount}</span> к списанию
-            </span>
+          <div className="flex items-center gap-2">
             {toWriteoffCount > 0 && (
               <button
                 className="btn-primary text-xs py-1.5 px-3"
-                onClick={postWriteoff}
-                disabled={posting}
+                onClick={() => setConfirmOpen(true)}
+                disabled={posting || report.writeoff_posted}
+                title={report.writeoff_posted ? "Списание уже отправлено" : undefined}
               >
                 {posting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-                {posting ? "Отправляем..." : `К списанию (${toWriteoffCount})`}
+                {posting ? "Отправляем..." : "Отправить к списанию"}
               </button>
             )}
             <button onClick={onClose} className="p-2 rounded-lg hover:bg-brand-bg transition-colors">
@@ -157,6 +145,31 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
             </button>
           </div>
         </div>
+
+        {/* Сводка */}
+        {!loading && (
+          <div className="grid grid-cols-4 gap-3 px-6 pt-4">
+            <div className="rounded-xl border border-brand-border bg-brand-bg/50 p-3 text-center">
+              <p className="text-2xl font-bold text-brand-dark">{items.length}</p>
+              <p className="text-xs text-brand-muted mt-0.5">Всего позиций</p>
+            </div>
+            <div className={cn("rounded-xl border p-3 text-center", overCount > 0 ? "border-red-200 bg-red-50" : "border-brand-border bg-brand-bg/50")}>
+              <p className={cn("text-2xl font-bold", overCount > 0 ? "text-brand-red" : "text-brand-muted")}>{overCount}</p>
+              <p className="text-xs text-brand-muted mt-0.5">Сверх нормы</p>
+            </div>
+            <div className={cn("rounded-xl border p-3 text-center", toWriteoffCount > 0 ? "border-yellow-200 bg-yellow-50" : "border-brand-border bg-brand-bg/50")}>
+              <p className={cn("text-2xl font-bold", toWriteoffCount > 0 ? "text-brand-yellow" : "text-brand-muted")}>{toWriteoffCount}</p>
+              <p className="text-xs text-brand-muted mt-0.5">
+                К списанию
+                {toWriteoffCount > 0 && <span className="block font-semibold">{toWriteoffQty.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} кг/шт</span>}
+              </p>
+            </div>
+            <div className={cn("rounded-xl border p-3 text-center", okCount === items.length && items.length > 0 ? "border-green-200 bg-green-50" : "border-brand-border bg-brand-bg/50")}>
+              <p className={cn("text-2xl font-bold", okCount === items.length && items.length > 0 ? "text-green-600" : "text-brand-muted")}>{okCount}</p>
+              <p className="text-xs text-brand-muted mt-0.5">В норме</p>
+            </div>
+          </div>
+        )}
 
         {/* Post result */}
         {postResult && (
@@ -169,76 +182,37 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
           </div>
         )}
 
-        {/* Filter tabs */}
-        <div className="flex gap-1 px-6 pt-3">
-          {[
-            { key: "all",         label: "Все",          count: allSorted.length },
-            { key: "over_limit",  label: "Сверх нормы",  count: overCount },
-            { key: "problems",    label: "Проблемные",   count: problemsCount },
-            { key: "to_writeoff", label: "К списанию",   count: toWriteoffCount },
-          ].map(({ key, label, count }) => (
-            <button
-              key={key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                "px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
-                filter === key
-                  ? "bg-brand-yellow text-brand-dark"
-                  : "text-brand-muted hover:bg-brand-bg"
-              )}
-            >
-              {label}
-              <span className="ml-1.5 text-brand-muted/70">{count}</span>
-            </button>
-          ))}
-        </div>
-
         {/* Table */}
         <div className="flex-1 overflow-auto px-6 pb-6 mt-3">
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 size={24} className="animate-spin text-brand-muted" />
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-20 text-brand-muted text-sm">Нет позиций</div>
+          ) : toWriteoffItems.length === 0 ? (
+            <div className="text-center py-20 text-brand-muted text-sm">Нет позиций к списанию</div>
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-brand-border">
-                  {["Код", "Наименование", "Группа", "Ед.", "Реализация", "Норма %", "Допустимо", "Уже списано", "Списано %", "Инвент.", "К списанию", "Статус"].map((h) => (
-                    <th key={h} className="text-left py-2 px-3 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
+                <tr className="border-b border-brand-border bg-brand-bg/60 sticky top-0">
+                  <th className="text-left py-2 px-3 text-brand-muted font-medium text-xs uppercase tracking-wide">Наименование</th>
+                  <th className="text-left py-2 px-3 text-brand-muted font-medium text-xs uppercase tracking-wide">Группа</th>
+                  <th className="text-right py-2 px-3 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">К списанию</th>
+                  <th className="text-right py-2 px-3 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">Инвентаризация</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => (
-                  <tr key={item.id} className={cn(
-                    "border-b border-brand-border/50 hover:bg-brand-bg/60 transition-colors",
-                    item.is_over_limit && "bg-red-50/50"
-                  )}>
-                    <td className="py-2 px-3 text-xs text-brand-muted font-mono">{item.product_num ?? "—"}</td>
-                    <td className="py-2 px-3 font-medium text-brand-dark max-w-[180px] truncate">{item.product_name ?? "—"}</td>
-                    <td className="py-2 px-3 text-brand-muted text-xs">{item.group ?? "—"}</td>
-                    <td className="py-2 px-3 text-brand-muted text-xs">{item.unit_type ?? ""}</td>
-                    <td className="py-2 px-3 text-right tabular-nums text-sm">{item.sales_qty.toLocaleString("ru-RU", { maximumFractionDigits: 3 })}</td>
-                    <td className="py-2 px-3 text-right tabular-nums text-sm text-brand-muted">
-                      {item.rate_pct != null ? `${item.rate_pct}%` : "—"}
+                {toWriteoffItems.map((item) => (
+                  <tr key={item.id} className="border-b border-brand-border/40 hover:bg-brand-bg/50 transition-colors">
+                    <td className="py-2.5 px-3">
+                      <p className="font-medium text-brand-dark max-w-[260px] truncate">{item.product_name ?? "—"}</p>
+                      {item.unit_type && <p className="text-xs text-brand-muted">{item.unit_type}</p>}
                     </td>
-                    <td className="py-2 px-3 text-right tabular-nums text-sm">{item.allowed_qty.toLocaleString("ru-RU", { maximumFractionDigits: 3 })}</td>
-                    <td className={cn("py-2 px-3 text-right tabular-nums text-sm font-medium", item.is_over_limit ? "text-brand-red" : "")}>
-                      {item.writeoff_qty.toLocaleString("ru-RU", { maximumFractionDigits: 3 })}
+                    <td className="py-2.5 px-3 text-brand-muted text-xs max-w-[140px] truncate">{item.group ?? "—"}</td>
+                    <td className="py-2.5 px-3 text-right tabular-nums whitespace-nowrap">
+                      <span className="font-bold text-brand-yellow">{item.to_writeoff_qty!.toLocaleString("ru-RU", { maximumFractionDigits: 3 })}</span>
                     </td>
-                    <td className={cn("py-2 px-3 text-right tabular-nums text-sm font-medium", item.is_over_limit ? "text-brand-red" : "text-green-600")}>
-                      {item.written_off_pct != null ? `${item.written_off_pct.toFixed(1)}%` : "—"}
-                    </td>
-                    <td className="py-2 px-3 text-right tabular-nums text-sm">{item.inventory_qty.toLocaleString("ru-RU", { maximumFractionDigits: 3 })}</td>
-                    <td className="py-2 px-3 text-right tabular-nums text-sm text-brand-yellow font-semibold">
-                      {item.to_writeoff_qty != null && item.to_writeoff_qty > 0 ? item.to_writeoff_qty.toLocaleString("ru-RU", { maximumFractionDigits: 3 }) : "—"}
-                    </td>
-                    <td className="py-2 px-3">
-                      <ItemStatusBadge status={item.status} />
+                    <td className="py-2.5 px-3 text-right tabular-nums whitespace-nowrap">
+                      <span className="font-semibold text-brand-red">{item.inventory_qty.toLocaleString("ru-RU", { maximumFractionDigits: 3 })}</span>
                     </td>
                   </tr>
                 ))}
@@ -247,6 +221,46 @@ function ItemsModal({ report, onClose }: { report: ReportWithRestaurant; onClose
           )}
         </div>
       </div>
+
+      {/* Confirm диалог отправки в IIKO */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-brand-yellow/15 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Send size={18} className="text-brand-yellow" />
+              </div>
+              <div>
+                <h3 className="font-bold text-brand-dark text-base">Отправить к списанию?</h3>
+                <p className="text-brand-muted text-sm mt-1">
+                  Будет создан акт списания по счетам на{" "}
+                  <span className="font-semibold text-brand-dark">{toWriteoffCount} позиций</span>.
+                  Документ появится в IIKO — не забудьте проверить и провести его.
+                </p>
+              </div>
+            </div>
+            <div className="text-xs text-brand-muted bg-brand-bg rounded-lg p-3 mb-5">
+              Ресторан: <span className="font-medium text-brand-dark">{report.restaurant_name}</span><br />
+              Период: <span className="font-medium text-brand-dark">{fmtPeriod(report.period)}</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                className="flex-1 px-4 py-2 rounded-lg border border-brand-border text-brand-muted text-sm font-medium hover:bg-brand-bg transition-colors"
+                onClick={() => setConfirmOpen(false)}
+              >
+                Отмена
+              </button>
+              <button
+                className="flex-1 btn-primary text-sm py-2"
+                onClick={postWriteoff}
+              >
+                <Send size={14} />
+                Да, отправить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -266,6 +280,8 @@ export default function ReportsPage() {
   const [error, setError] = useState("")
   const [loadingReports, setLoadingReports] = useState(true)
   const [selectedReport, setSelectedReport] = useState<ReportWithRestaurant | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<ReportWithRestaurant | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -353,11 +369,24 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url)
   }
 
+  const deleteReport = async (report: ReportWithRestaurant) => {
+    setDeleting(true)
+    try {
+      await api.delete(`/reports/${report.id}`)
+      await loadReports()
+    } catch (e: any) {
+      setError(e.response?.data?.detail || e.message)
+    } finally {
+      setDeleting(false)
+      setDeleteConfirm(null)
+    }
+  }
+
   const restaurantName = (id: number) =>
     restaurants.find((r) => r.id === id)?.name ?? `#${id}`
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-brand-dark">Отчёты</h1>
@@ -468,7 +497,7 @@ export default function ReportsPage() {
 
       {/* Reports list */}
       <div className="card">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-brand-border">
           <h2 className="font-semibold text-brand-dark flex items-center gap-2">
             <FileText size={16} className="text-brand-yellow" />
             История отчётов
@@ -494,65 +523,175 @@ export default function ReportsPage() {
             <p className="text-xs mt-1">Сгенерируйте первый отчёт выше</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-brand-border">
-                  {["#", "Ресторан", "Период", "Статус", "Создан", ""].map((h) => (
-                    <th key={h} className="text-left py-3 px-5 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {reports.map((r) => (
-                  <tr key={r.id} className="border-b border-brand-border/50 hover:bg-brand-bg/60 transition-colors">
-                    <td className="py-3 px-5 text-brand-muted font-mono text-xs">{r.id}</td>
-                    <td className="py-3 px-5 font-medium text-brand-dark">{restaurantName(r.restaurant_id)}</td>
-                    <td className="py-3 px-5 text-brand-dark">{r.period}</td>
-                    <td className="py-3 px-5">
-                      <StatusBadge status={r.status} />
-                    </td>
-                    <td className="py-3 px-5 text-brand-muted text-xs whitespace-nowrap">
-                      {new Date(r.created_at).toLocaleString("ru-RU")}
-                    </td>
-                    <td className="py-3 px-5">
-                      <div className="flex items-center gap-2 justify-end">
-                        {r.status === "ready" && (
-                          <>
-                            <button
-                              className="btn-secondary text-xs py-1 px-2.5"
-                              onClick={() => setSelectedReport({ ...r, restaurant_name: restaurantName(r.restaurant_id) })}
-                            >
-                              <ChevronRight size={13} />
-                              Просмотр
-                            </button>
-                            <button
-                              className="btn-secondary text-xs py-1 px-2.5"
-                              onClick={() => download(r.id)}
-                            >
-                              <Download size={13} />
-                              Excel
-                            </button>
-                          </>
-                        )}
-                        {(r.status === "error") && (
-                          <span className="text-xs text-brand-red">Ошибка генерации</span>
-                        )}
-                      </div>
-                    </td>
+          <>
+            {/* Desktop: таблица */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-brand-border">
+                    {["Ресторан", "Период", "Статус", "Создан", ""].map((h) => (
+                      <th key={h} className="text-left py-3 px-5 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {reports.map((r) => (
+                    <tr
+                      key={r.id}
+                      className={cn(
+                        "border-b border-brand-border/50 transition-colors",
+                        r.status === "ready" ? "hover:bg-brand-bg/60 cursor-pointer" : ""
+                      )}
+                      onClick={() => {
+                        if (r.status === "ready") setSelectedReport({ ...r, restaurant_name: restaurantName(r.restaurant_id) })
+                      }}
+                    >
+                      <td className="py-3 px-5 font-medium text-brand-dark">{restaurantName(r.restaurant_id)}</td>
+                      <td className="py-3 px-5 text-brand-dark">{fmtPeriod(r.period)}</td>
+                      <td className="py-3 px-5"><StatusBadge status={r.status} /></td>
+                      <td className="py-3 px-5 text-brand-muted text-xs whitespace-nowrap">
+                        {new Date(r.created_at).toLocaleString("ru-RU")}
+                      </td>
+                      <td className="py-3 px-5">
+                        <div className="flex items-center gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
+                          {r.status === "ready" && (
+                            <button className="btn-secondary text-xs py-1 px-2.5" onClick={() => download(r.id)}>
+                              <Download size={13} />Excel
+                            </button>
+                          )}
+                          {r.status === "error" && (
+                            <button className="text-xs text-brand-red hover:underline" onClick={() => generate()}>
+                              Повторить
+                            </button>
+                          )}
+                          <button
+                            className="p-1.5 rounded-lg text-brand-muted hover:bg-red-50 hover:text-brand-red transition-colors"
+                            onClick={() => setDeleteConfirm({ ...r, restaurant_name: restaurantName(r.restaurant_id) })}
+                            title="Удалить"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile: карточки */}
+            <div className="sm:hidden divide-y divide-brand-border/40">
+              {reports.map((r) => (
+                <div
+                  key={r.id}
+                  className={cn(
+                    "px-4 py-3.5 transition-colors",
+                    r.status === "ready" ? "cursor-pointer active:bg-brand-bg/60" : ""
+                  )}
+                  onClick={() => {
+                    if (r.status === "ready") setSelectedReport({ ...r, restaurant_name: restaurantName(r.restaurant_id) })
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-brand-dark text-sm truncate">{restaurantName(r.restaurant_id)}</p>
+                      <p className="text-brand-muted text-xs mt-0.5">{fmtPeriod(r.period)}</p>
+                    </div>
+                    <StatusBadge status={r.status} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-brand-muted text-xs">
+                      {new Date(r.created_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      {r.status === "ready" && (
+                        <button
+                          className="flex items-center gap-1 text-xs font-medium text-brand-dark border border-brand-border rounded-lg px-2.5 py-1.5 hover:bg-brand-bg transition-colors"
+                          onClick={() => download(r.id)}
+                        >
+                          <Download size={12} />Excel
+                        </button>
+                      )}
+                      {r.status === "ready" && (
+                        <button
+                          className="flex items-center gap-1 text-xs font-medium text-brand-dark border border-brand-border rounded-lg px-2.5 py-1.5 hover:bg-brand-bg transition-colors"
+                          onClick={() => setSelectedReport({ ...r, restaurant_name: restaurantName(r.restaurant_id) })}
+                        >
+                          <ChevronRight size={12} />Открыть
+                        </button>
+                      )}
+                      {r.status === "error" && (
+                        <button className="text-xs text-brand-red font-medium" onClick={() => generate()}>
+                          Повторить
+                        </button>
+                      )}
+                      <button
+                        className="p-1.5 rounded-lg text-brand-muted hover:bg-red-50 hover:text-brand-red transition-colors"
+                        onClick={() => setDeleteConfirm({ ...r, restaurant_name: restaurantName(r.restaurant_id) })}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
       {/* Items modal */}
       {selectedReport && (
-        <ItemsModal report={selectedReport} onClose={() => setSelectedReport(null)} />
+        <ItemsModal
+          report={selectedReport}
+          onClose={() => setSelectedReport(null)}
+          onPosted={(id) => {
+            setReports((prev) => prev.map((r) => r.id === id ? { ...r, writeoff_posted: true } : r))
+            setSelectedReport((prev) => prev ? { ...prev, writeoff_posted: true } : prev)
+          }}
+        />
+      )}
+
+      {/* Delete confirm modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Trash2 size={18} className="text-brand-red" />
+              </div>
+              <div>
+                <h3 className="font-bold text-brand-dark text-base">Удалить отчёт?</h3>
+                <p className="text-brand-muted text-sm mt-1">
+                  Отчёт будет удалён безвозвратно. Восстановить данные будет невозможно.
+                </p>
+              </div>
+            </div>
+            <div className="text-xs text-brand-muted bg-brand-bg rounded-lg p-3 mb-5">
+              Ресторан: <span className="font-medium text-brand-dark">{deleteConfirm.restaurant_name}</span><br />
+              Период: <span className="font-medium text-brand-dark">{fmtPeriod(deleteConfirm.period)}</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                className="flex-1 px-4 py-2 rounded-lg border border-brand-border text-brand-muted text-sm font-medium hover:bg-brand-bg transition-colors"
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleting}
+              >
+                Отмена
+              </button>
+              <button
+                className="flex-1 px-4 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-red-700 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-60"
+                onClick={() => deleteReport(deleteConfirm)}
+                disabled={deleting}
+              >
+                {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                {deleting ? "Удаляем..." : "Удалить"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

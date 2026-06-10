@@ -67,6 +67,8 @@ DAILY_ROW = {
     "pct_dlv": 13, "pct_mobile": 14,
 }
 
+DAILY_COL_DONE = 5   # E — "Выполнено на X%"
+
 CLEAR_RANGES = {
     "Утро":  ["C4:C13","E4:E13","G4:G13","I4:I13","M4:M13","O4:O13","Q4:Q13","R4:R13"],
     "Вечер": ["C4:C12","E4:E12","G4:G12","I4:I12","M4:M12","O4:O12","Q4:Q12","R4:R12"],
@@ -122,6 +124,166 @@ def _get_spreadsheet(gc, sheet_id: str):
     except Exception as e:
         log.error("Не удалось открыть Google Sheet %s: %s", sheet_id, e)
         return None
+
+
+def _col_letter_to_num(col: str) -> int:
+    result = 0
+    for ch in col.upper():
+        result = result * 26 + (ord(ch) - ord('A') + 1)
+    return result
+
+
+def _range_false_values(range_str: str) -> list:
+    """Возвращает 2D-массив False нужного размера для заданного диапазона (A1:B3 и т.п.)."""
+    import re
+    m = re.match(r'([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)', range_str)
+    if not m:
+        return [[False]]
+    cols = _col_letter_to_num(m.group(3)) - _col_letter_to_num(m.group(1)) + 1
+    rows = int(m.group(4)) - int(m.group(2)) + 1
+    return [[False] * cols for _ in range(rows)]
+
+
+# Конфигурация очистки листов
+CLEAR_CONFIG = {
+    "ПОДГОТОВКА К СМЕНЕ": {
+        "checkboxes": ["A6:B14", "A16:B19", "A21:B26", "A28:B33", "A35:B38"],
+        "clear":      ["E6:F38"],
+    },
+    "Цели на День": {
+        "checkboxes": [],
+        "clear":      ["B8:E9", "B15:E18", "A22:E22", "A24:E24", "A26:E26"],
+    },
+    "В ТЕЧЕНИЕ СМЕНЫ": {
+        "checkboxes": ["A3:B8", "A19:B22", "A24:B26", "A28:B32", "A34:B36", "A39:A41"],
+        "clear":      [],
+    },
+    "Утро": {
+        "checkboxes": [],
+        "clear":      ["A17:T17", "A19:T19", "A21:T21"],
+    },
+    "Вечер": {
+        "checkboxes": [],
+        "clear":      ["A16:T16", "A18:T18", "A20:T20"],
+    },
+    "Ночь": {
+        "checkboxes": ["A14:B19"],
+        "clear":      [],
+    },
+    "ПОСЛЕ СМЕНЫ/ИТОГИ": {
+        "checkboxes": [],
+        "clear":      ["A3:I8", "A10:I16", "A18:I26"],
+    },
+    "ФОТО": {
+        "checkboxes": [],
+        "clear":      ["A1:I26"],
+    },
+}
+
+
+def _delete_floating_images(spreadsheet, sheet_names: list) -> int:
+    """Удаляет все плавающие изображения с указанных листов через Sheets API v4."""
+    import requests as http_req
+    from google.auth.transport.requests import Request
+
+    try:
+        creds = spreadsheet.client.auth
+        if not creds.valid:
+            creds.refresh(Request())
+        token = creds.token
+    except Exception as e:
+        log.warning("Не удалось получить токен для удаления фото: %s", e)
+        return 0
+
+    sid = spreadsheet.id
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Получаем все листы без фильтрации полей — чтобы видеть полную структуру
+    try:
+        resp = http_req.get(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{sid}",
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.warning("Ошибка получения данных таблицы: %s", e)
+        return 0
+
+    # Логируем все листы — чтобы видеть точные названия
+    all_titles = [s.get("properties", {}).get("title", "") for s in data.get("sheets", [])]
+    log.info("Все листы в таблице: %s", all_titles)
+
+    delete_requests = []
+    for sheet in data.get("sheets", []):
+        title = sheet.get("properties", {}).get("title", "")
+        if title not in sheet_names:
+            continue
+        sheet_id = sheet.get("properties", {}).get("sheetId")
+        log.info("  Ищем изображения на листе '%s' (id=%s), ключи: %s",
+                 title, sheet_id, list(sheet.keys()))
+
+        # Floating images могут быть в разных полях в зависимости от версии API
+        for img in sheet.get("images", []):
+            img_id = img.get("imageId") or img.get("objectId")
+            if img_id is not None:
+                delete_requests.append({"deleteEmbeddedObject": {"objectId": img_id}})
+                log.info("    + image id=%s", img_id)
+
+        for chart in sheet.get("charts", []):
+            chart_id = chart.get("chartId")
+            if chart_id is not None:
+                delete_requests.append({"deleteEmbeddedObject": {"objectId": chart_id}})
+                log.info("    + chart id=%s", chart_id)
+
+    if not delete_requests:
+        log.info("Плавающих объектов не найдено на листах: %s", sheet_names)
+        return 0
+
+    try:
+        resp2 = http_req.post(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{sid}:batchUpdate",
+            headers=headers,
+            json={"requests": delete_requests},
+            timeout=15,
+        )
+        resp2.raise_for_status()
+        log.info("Удалено объектов: %d", len(delete_requests))
+        return len(delete_requests)
+    except Exception as e:
+        body = ""
+        try:
+            body = e.response.text
+        except Exception:
+            pass
+        log.warning("Ошибка удаления: %s | %s", e, body)
+        return 0
+
+
+def _clear_spreadsheet(spreadsheet):
+    """Очищает все дневные ячейки: чекбоксы → False, остальные → пусто, фото → удалено."""
+    cleared = []
+    for sheet_name, cfg in CLEAR_CONFIG.items():
+        try:
+            ws = spreadsheet.worksheet(sheet_name)
+        except Exception as e:
+            log.warning("Лист '%s' не найден: %s", sheet_name, e)
+            continue
+
+        if cfg["checkboxes"]:
+            updates = [{"range": r, "values": _range_false_values(r)} for r in cfg["checkboxes"]]
+            ws.batch_update(updates, value_input_option="RAW")
+
+        if cfg["clear"]:
+            ws.batch_clear(cfg["clear"])
+
+        cleared.append(sheet_name)
+        log.info("  Очищен лист '%s'", sheet_name)
+
+    # Удаляем плавающие изображения только с листа "ФОТО"
+    _delete_floating_images(spreadsheet, ["ФОТО"])
+    return cleared
 
 
 # ── IIKO helpers ─────────────────────────────────────────────────────────────
@@ -362,6 +524,19 @@ def _update_hourly_plan(ws, plan_data: dict, shift_hours: list):
     log.info("  [%s] план: %d ячеек", ws.title, len(updates))
 
 
+def _write_daily_done_formulas(ws):
+    """Колонка E листа Цели на День: =IF(C{row}>0; "Выполнено "&ROUND(D{row}/C{row}*100;1)&"%"; "-")"""
+    updates = []
+    for row in DAILY_ROW.values():
+        # Русскоязычная Google Sheets использует точку с запятой (;) вместо запятой
+        # Добавляем "Выполнено " перед процентом
+        formula = f'=IF(C{row}>0;"Выполнено "&ROUND(D{row}/C{row}*100;1)&"%";"-")'
+        updates.append({"range": _cell(row, DAILY_COL_DONE), "values": [[formula]]})
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+    log.info("  [%s] формулы %% выполнения: %d ячеек", ws.title, len(updates))
+
+
 def _update_daily(ws, data: dict, col: int):
     tgc = data["total_gc"]
     def pct(v): return round(v / tgc * 100, 1) if tgc else 0
@@ -476,10 +651,49 @@ def _sync_restaurant(db, restaurant, sheet_id: str, is_morning: bool, business_d
             except Exception:
                 pass
         try:
-            spreadsheet.worksheet(DAILY_SHEET).batch_clear(["B5:B14", "D5:D14"])
-        except Exception:
-            pass
+            ws_daily_clr = spreadsheet.worksheet(DAILY_SHEET)
+            ws_daily_clr.batch_clear(["B5:B14", "D5:D14", "E5:E14"])
+            _write_daily_done_formulas(ws_daily_clr)
+        except Exception as e:
+            log.error("%s: ошибка очистки/формул Цели на День: %s", restaurant.name, e)
         log.info("%s: листы очищены", restaurant.name)
+
+        # Записываем текущую бизнес-дату в D1:E1 листа ПОДГОТОВКА К СМЕНЕ
+        try:
+            ws_prep = spreadsheet.worksheet("ПОДГОТОВКА К СМЕНЕ")
+            date_str = business_date.strftime("%d.%m.%Y")
+            ws_prep.update("D1:E1", [[f"Дата: {date_str}"]], value_input_option="USER_ENTERED")
+            log.info("%s: дата '%s' записана в ПОДГОТОВКА К СМЕНЕ D1", restaurant.name, date_str)
+        except Exception as e:
+            log.error("%s: ошибка записи даты в ПОДГОТОВКА К СМЕНЕ: %s", restaurant.name, e)
+
+        # ── ПРЕДЫДУЩИЙ ДЕНЬ: загружаем из IIKO с разбивкой по каналам ──
+        prev_date = business_date - timedelta(days=1)
+        prev_from = prev_date.strftime("%Y-%m-%dT00:00:00")
+        prev_to = business_date.strftime("%Y-%m-%dT00:00:00")
+
+        log.info("%s: загружаем предыдущий день %s из IIKO", restaurant.name, prev_date)
+        try:
+            prev_rows = fetch_olap(db, restaurant, hourly_preset, prev_from, prev_to)
+            prev_rows = [r for r in prev_rows if r.get("Department") == dept]
+            prev_hours = _parse_hourly(prev_rows)
+            if prev_hours:
+                prev_data = _daily_from_hourly(prev_hours)
+                if prev_data["total_gc"] > 0:
+                    ws_daily_prev = spreadsheet.worksheet(DAILY_SHEET)
+                    _update_daily(ws_daily_prev, prev_data, DAILY_COL_PREV)
+                    log.info("%s: предыдущий день записан — GC=%d Sales=%s DT=%d%% Kiosk=%d%% Cafe=%d%% DLV=%d%%",
+                             restaurant.name, prev_data["total_gc"], prev_data["total_sales"],
+                             round(prev_data["dt_gc"]/prev_data["total_gc"]*100) if prev_data["total_gc"] else 0,
+                             round(prev_data["kiosk_gc"]/prev_data["total_gc"]*100) if prev_data["total_gc"] else 0,
+                             round(prev_data["cafe_gc"]/prev_data["total_gc"]*100) if prev_data["total_gc"] else 0,
+                             round(prev_data["dlv_gc"]/prev_data["total_gc"]*100) if prev_data["total_gc"] else 0)
+                else:
+                    log.warning("%s: предыдущий день — нет данных (GC=0)", restaurant.name)
+            else:
+                log.warning("%s: предыдущий день — нет почасовых данных", restaurant.name)
+        except Exception as e:
+            log.error("%s: ошибка загрузки предыдущего дня из IIKO: %s", restaurant.name, e)
 
         # ── ПЛАН: сначала смотрим в нашу БД ──
         db_plan = db.query(SalesDailyPlan).filter(
@@ -579,6 +793,8 @@ def _sync_restaurant(db, restaurant, sheet_id: str, is_morning: bool, business_d
             try:
                 ws_daily = spreadsheet.worksheet(DAILY_SHEET)
                 _update_daily(ws_daily, daily_data, DAILY_COL_TODAY)
+                # Обновляем формулы % выполнения каждый раз (чтобы не терялись)
+                _write_daily_done_formulas(ws_daily)
             except Exception as e:
                 log.error("%s: дневной факт ошибка: %s", restaurant.name, e)
 
@@ -602,7 +818,6 @@ def sync_checklist_hourly():
     from app.models.restaurant import Restaurant
 
     now_almaty = datetime.now(ALMATY_TZ)
-    today = now_almaty.date()
     # Бизнес дата: если до 07:00 — это ещё предыдущий день
     business_date = (now_almaty - timedelta(hours=7)).date() if now_almaty.hour < 7 \
                     else now_almaty.date()
@@ -617,7 +832,7 @@ def sync_checklist_hourly():
             Restaurant.is_active == True,
             Restaurant.google_sheet_url.isnot(None),
             Restaurant.google_sheet_url != "",
-            Restaurant.last_checklist_reset_date == today,   # только если день начат
+            Restaurant.last_checklist_reset_date == business_date,  # по бизнес-дате, не по календарю
         ).all()
 
         log.info("Активных ресторанов сегодня: %d", len(restaurants))
@@ -685,6 +900,48 @@ def start_day_sync_task(restaurant_id: int):
         db.close()
 
     log.info("=== start-day sync done ===")
+
+
+@celery_app.task(name="app.tasks.checklist_tasks.clear_sheets_task")
+def clear_sheets_task(restaurant_id: int):
+    """
+    Очищает Google Sheets ресторана:
+    - Чекбоксы → False (ПОДГОТОВКА К СМЕНЕ, В ТЕЧЕНИЕ СМЕНЫ, Ночь)
+    - Обеденные и дневные ячейки → пусто
+    """
+    from app.core.database import SessionLocal
+    from app.models.restaurant import Restaurant
+    from app.services.telegram import alert_error, alert_ok
+
+    log.info("=== clear-sheets | restaurant_id=%d ===", restaurant_id)
+    db = SessionLocal()
+    try:
+        restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
+        if not restaurant or not restaurant.google_sheet_url:
+            log.error("Ресторан %d не найден или нет Google Sheet", restaurant_id)
+            return
+
+        sheet_id = _extract_sheet_id(restaurant.google_sheet_url)
+        if not sheet_id:
+            log.error("%s: не удалось извлечь Sheet ID", restaurant.name)
+            return
+
+        gc_client = _sheets_client()
+        if not gc_client:
+            return
+        spreadsheet = _get_spreadsheet(gc_client, sheet_id)
+        if not spreadsheet:
+            return
+
+        cleared = _clear_spreadsheet(spreadsheet)
+        alert_ok(f"Чек-лист: очистка завершена — {restaurant.name}",
+                 f"Очищено листов: {len(cleared)}: {', '.join(cleared)}")
+        log.info("=== clear-sheets done: %s ===", ', '.join(cleared))
+    except Exception as e:
+        log.error("Ошибка clear-sheets %d: %s", restaurant_id, e)
+        alert_error(f"Чек-лист: ошибка очистки (ресторан #{restaurant_id})", str(e))
+    finally:
+        db.close()
 
 
 @celery_app.task(name="app.tasks.checklist_tasks.sync_planning_facts_hourly")

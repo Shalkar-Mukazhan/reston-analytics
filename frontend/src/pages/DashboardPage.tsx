@@ -8,8 +8,16 @@ import {
   BarChart3, ChevronLeft, ChevronRight,
 } from "lucide-react"
 import { cn } from "../lib/utils"
+
+function fmtPeriod(period: string): string {
+  const wMatch = period.match(/^(\d{4}-\d{2})-W(\d+)$/)
+  if (wMatch) return `${wMatch[1]} неделя ${wMatch[2]}`
+  if (/^\d{4}-\d{2}$/.test(period)) return `${period} месяц`
+  return period
+}
 import {
   PieChart, Pie, Cell, Tooltip as ReTooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts"
 
 interface SparkPoint { period: string; waste_pct: number }
@@ -34,7 +42,7 @@ interface RestaurantMetric {
 
 interface TopProduct {
   product_name: string
-  total_to_writeoff: number
+  total_inv: number
   restaurant_count: number
 }
 
@@ -60,7 +68,9 @@ interface RecentReport {
 interface DashboardData {
   summary: Summary
   restaurants: RestaurantMetric[]
-  top_products: TopProduct[]
+  top_shortage: TopProduct[]
+  top_surplus: TopProduct[]
+  top_over_limit: TopProduct[]
   recent_reports: RecentReport[]
   current_month: string
   is_current: boolean
@@ -124,31 +134,6 @@ function WasteBadge({ pct }: { pct: number }) {
   )
 }
 
-// ── Мини-спарклайн ────────────────────────────────────────────────────────────
-function MiniSparkline({ data }: { data: SparkPoint[] }) {
-  const vals = data.map(d => d.waste_pct)
-  if (!vals.length || vals.every(v => v === 0)) return <span className="text-brand-muted text-xs">—</span>
-
-  const W = 56, H = 22, pad = 2
-  const maxV = Math.max(...vals, WASTE_LIMIT) || 1
-  const pts = vals.map((v, i) => {
-    const x = pad + (i / Math.max(vals.length - 1, 1)) * (W - pad * 2)
-    const y = H - pad - (v / maxV) * (H - pad * 2)
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(" ")
-  const limitY = H - pad - (WASTE_LIMIT / maxV) * (H - pad * 2)
-  const hasExcess = vals.some(v => v > WASTE_LIMIT)
-
-  return (
-    <svg width={W} height={H} className="overflow-visible">
-      <line x1={pad} y1={limitY} x2={W - pad} y2={limitY} stroke="#d1d5db" strokeDasharray="2,2" strokeWidth={1} />
-      <polyline points={pts} fill="none"
-        stroke={hasExcess ? "#ef4444" : "#22c55e"}
-        strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
 // ── Дельта месяц к месяцу ─────────────────────────────────────────────────────
 function DeltaBadge({ delta }: { delta: number | null }) {
   if (delta === null) return <span className="text-brand-muted text-xs">—</span>
@@ -180,12 +165,20 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
   const [data, setData] = useState<HourlySalesData | null>(null)
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
+  function fetchData(d: string) {
     setLoading(true)
-    api.get(`/dashboard/hourly-sales?restaurant_id=${restaurantId}&date=${date}`)
+    api.get(`/dashboard/hourly-sales?restaurant_id=${restaurantId}&date=${d}`)
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    fetchData(date)
+    // Авто-обновление каждые 15 минут только для сегодняшнего дня
+    if (date !== todayStr()) return
+    const interval = setInterval(() => fetchData(todayStr()), 15 * 60 * 1000)
+    return () => clearInterval(interval)
   }, [restaurantId, date])
 
   function shiftDate(days: number) {
@@ -234,20 +227,53 @@ function HourlySalesSection({ restaurantId }: { restaurantId: number }) {
       ) : (
         <>
           {/* Итоги */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="card p-4 text-center">
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Продажи</p>
-              <p className="text-xl font-bold text-brand-dark">{fmtMoneyFull(data!.totals.sales_sum)}</p>
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <div className="card p-3 sm:p-4 text-center">
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Продажи</p>
+              <p className="text-sm sm:text-xl font-bold text-brand-dark tabular-nums">{fmtMoneyFull(data!.totals.sales_sum)}</p>
             </div>
-            <div className="card p-4 text-center">
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Чеков (GC)</p>
-              <p className="text-xl font-bold text-brand-dark">{data!.totals.gc.toLocaleString("ru-RU")}</p>
+            <div className="card p-3 sm:p-4 text-center">
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Чеков (GC)</p>
+              <p className="text-sm sm:text-xl font-bold text-brand-dark tabular-nums">{data!.totals.gc.toLocaleString("ru-RU")}</p>
             </div>
-            <div className="card p-4 text-center">
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Ср. чек</p>
-              <p className="text-xl font-bold text-brand-dark">{data!.totals.avg_check.toLocaleString("ru-RU")} ₸</p>
+            <div className="card p-3 sm:p-4 text-center">
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Ср. чек</p>
+              <p className="text-sm sm:text-xl font-bold text-brand-dark tabular-nums">{data!.totals.avg_check.toLocaleString("ru-RU")} ₸</p>
             </div>
           </div>
+
+          {/* График продаж по часам */}
+          {data!.by_hour.length > 0 && (
+            <div className="card p-5">
+              <h3 className="font-medium text-brand-dark text-sm mb-4">Продажи по часам</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={data!.by_hour} margin={{ top: 4, right: 8, left: 0, bottom: 0 }} barSize={18}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="hour"
+                    tickFormatter={(h) => `${h}:00`}
+                    tick={{ fontSize: 11, fill: "#9ca3af" }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}М` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}К` : String(v)}
+                    tick={{ fontSize: 11, fill: "#9ca3af" }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={48}
+                  />
+                  <ReTooltip
+                    cursor={{ fill: "#fef9ec" }}
+                    formatter={(value: number) => [fmtMoneyFull(value), "Продажи"]}
+                    labelFormatter={(h) => `${h}:00`}
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  />
+                  <Bar dataKey="sales_sum" fill="#FDB714" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Pie + таблица */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -387,39 +413,39 @@ function StoreDashboard({ m, reports: _reports, refreshing }: { m: RestaurantMet
         <div className="flex items-center justify-between">
           <div>
             <p className="text-white/70 text-sm mb-1">{m.restaurant_name}</p>
-            <p className="text-4xl font-bold">{fmt(m.waste_pct)}%</p>
-            <p className="text-white/80 text-sm mt-1 flex items-center gap-2">
-              Waste State • период {m.period}
+            <p className="text-3xl sm:text-4xl font-bold">{fmt(m.waste_pct)}%</p>
+            <p className="text-white/80 text-xs sm:text-sm mt-1 flex flex-wrap items-center gap-1 sm:gap-2">
+              Waste State • период {fmtPeriod(m.period)}
               {refreshing && <span className="inline-flex items-center gap-1 text-white/60 text-xs"><Loader2 size={11} className="animate-spin" /> обновляем...</span>}
             </p>
           </div>
-          <div className="text-right">
+          <div className="text-right flex-shrink-0 ml-4">
             {ok
-              ? <><CheckCircle2 size={48} className="text-white/80 ml-auto mb-1" /><p className="text-white/80 text-sm">В норме ≤{WASTE_LIMIT}%</p></>
-              : <><AlertTriangle size={48} className="text-white/80 ml-auto mb-1" /><p className="text-white/80 text-sm">Превышение!</p></>
+              ? <><CheckCircle2 size={40} className="text-white/80 ml-auto mb-1" /><p className="text-white/80 text-xs sm:text-sm">В норме ≤{WASTE_LIMIT}%</p></>
+              : <><AlertTriangle size={40} className="text-white/80 ml-auto mb-1" /><p className="text-white/80 text-xs sm:text-sm">Превышение!</p></>
             }
           </div>
         </div>
       </div>
 
       {/* 3 метрики */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="card p-5">
-          <p className="text-brand-muted text-xs uppercase tracking-wide mb-2">% Недостачи</p>
-          <p className={cn("text-3xl font-bold", m.shortage_pct > 0 ? "text-brand-red" : "text-brand-dark")}>
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
+        <div className="card p-3 sm:p-5">
+          <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1 sm:mb-2">% Недостачи</p>
+          <p className={cn("text-lg sm:text-3xl font-bold", m.shortage_pct > 0 ? "text-brand-red" : "text-brand-dark")}>
             {fmt(m.shortage_pct)}%
           </p>
-          <p className="text-brand-muted text-xs mt-1">{fmtMoney(m.shortage_sum)}</p>
+          <p className="text-brand-muted text-[10px] sm:text-xs mt-1">{fmtMoney(m.shortage_sum)}</p>
         </div>
-        <div className="card p-5">
-          <p className="text-brand-muted text-xs uppercase tracking-wide mb-2">Complete Waste %</p>
-          <p className="text-3xl font-bold text-brand-dark">{fmt(m.writeoff_pct)}%</p>
-          <p className="text-brand-muted text-xs mt-1">{fmtMoney(m.complete_waste_sum)}</p>
+        <div className="card p-3 sm:p-5">
+          <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1 sm:mb-2">Waste %</p>
+          <p className="text-lg sm:text-3xl font-bold text-brand-dark">{fmt(m.writeoff_pct)}%</p>
+          <p className="text-brand-muted text-[10px] sm:text-xs mt-1">{fmtMoney(m.complete_waste_sum)}</p>
         </div>
-        <div className="card p-5">
-          <p className="text-brand-muted text-xs uppercase tracking-wide mb-2">Выручка (без НДС)</p>
-          <p className="text-3xl font-bold text-brand-dark">{fmtMoney(m.revenue_sum)}</p>
-          <p className="text-brand-muted text-xs mt-1">реализация</p>
+        <div className="card p-3 sm:p-5">
+          <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1 sm:mb-2">Выручка</p>
+          <p className="text-lg sm:text-3xl font-bold text-brand-dark">{fmtMoney(m.revenue_sum)}</p>
+          <p className="text-brand-muted text-[10px] sm:text-xs mt-1">без НДС</p>
         </div>
       </div>
 
@@ -444,74 +470,81 @@ function AdminDashboard({ data, onRefreshRestaurant, onRefreshAll, refreshingId,
   return (
     <div className="space-y-6">
       {/* KPI карточки */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="card p-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="card p-3 sm:p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Ресторанов</p>
-              <p className="text-3xl font-bold text-brand-dark">{s.restaurants_count}</p>
-              <p className="text-brand-muted text-xs mt-1">с данными: {s.restaurants_with_data}</p>
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Ресторанов</p>
+              <p className="text-xl sm:text-3xl font-bold text-brand-dark">{s.restaurants_count}</p>
+              <p className="text-brand-muted text-[10px] sm:text-xs mt-1">с данными: {s.restaurants_with_data}</p>
             </div>
-            <div className="p-2.5 rounded-xl bg-brand-yellow/10">
-              <Store size={20} className="text-brand-yellow" />
+            <div className="p-2 sm:p-2.5 rounded-xl bg-brand-yellow/10">
+              <Store size={16} className="text-brand-yellow sm:hidden" />
+              <Store size={20} className="text-brand-yellow hidden sm:block" />
             </div>
           </div>
         </div>
 
-        <div className="card p-5">
+        <div className="card p-3 sm:p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Выручка без НДС (итого)</p>
-              <p className="text-2xl font-bold text-brand-dark">{fmtMoney(s.total_revenue)}</p>
-              <p className="text-brand-muted text-xs mt-1">по последним отчётам</p>
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Выручка без НДС</p>
+              <p className="text-base sm:text-2xl font-bold text-brand-dark tabular-nums">{fmtMoney(s.total_revenue)}</p>
+              <p className="text-brand-muted text-[10px] sm:text-xs mt-1">по последним отчётам</p>
             </div>
-            <div className="p-2.5 rounded-xl bg-blue-50">
-              <BarChart3 size={20} className="text-blue-500" />
+            <div className="p-2 sm:p-2.5 rounded-xl bg-blue-50">
+              <BarChart3 size={16} className="text-blue-500 sm:hidden" />
+              <BarChart3 size={20} className="text-blue-500 hidden sm:block" />
             </div>
           </div>
         </div>
 
-        <div className="card p-5">
+        <div className="card p-3 sm:p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Средний Waste %</p>
-              <p className={cn("text-3xl font-bold", s.avg_waste_pct > WASTE_LIMIT ? "text-brand-red" : "text-green-600")}>
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Средний Waste %</p>
+              <p className={cn("text-xl sm:text-3xl font-bold", s.avg_waste_pct > WASTE_LIMIT ? "text-brand-red" : "text-green-600")}>
                 {fmt(s.avg_waste_pct)}%
               </p>
-              <p className="text-brand-muted text-xs mt-1 flex items-center gap-1">
+              <p className="text-brand-muted text-[10px] sm:text-xs mt-1 flex items-center gap-1">
                 {s.avg_waste_pct > WASTE_LIMIT
-                  ? <><TrendingUp size={11} className="text-brand-red" /> Лимит {WASTE_LIMIT}%</>
-                  : <><CheckCircle2 size={11} className="text-green-500" /> В норме</>
+                  ? <><TrendingUp size={10} className="text-brand-red" /> Лимит {WASTE_LIMIT}%</>
+                  : <><CheckCircle2 size={10} className="text-green-500" /> В норме</>
                 }
               </p>
             </div>
-            <div className={cn("p-2.5 rounded-xl", s.avg_waste_pct > WASTE_LIMIT ? "bg-red-50" : "bg-green-50")}>
+            <div className={cn("p-2 sm:p-2.5 rounded-xl", s.avg_waste_pct > WASTE_LIMIT ? "bg-red-50" : "bg-green-50")}>
               {s.avg_waste_pct > WASTE_LIMIT
-                ? <TrendingUp size={20} className="text-brand-red" />
-                : <TrendingDown size={20} className="text-green-500" />
+                ? <TrendingUp size={16} className="text-brand-red sm:hidden" />
+                : <TrendingDown size={16} className="text-green-500 sm:hidden" />
+              }
+              {s.avg_waste_pct > WASTE_LIMIT
+                ? <TrendingUp size={20} className="text-brand-red hidden sm:block" />
+                : <TrendingDown size={20} className="text-green-500 hidden sm:block" />
               }
             </div>
           </div>
         </div>
 
-        <div className="card p-5">
+        <div className="card p-3 sm:p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">Сверх нормы</p>
-              <p className="text-3xl font-bold text-brand-red">{s.total_over_limit}</p>
-              <p className="text-brand-muted text-xs mt-1">позиций по всем ресторанам</p>
+              <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1">Сверх нормы</p>
+              <p className="text-xl sm:text-3xl font-bold text-brand-red">{s.total_over_limit}</p>
+              <p className="text-brand-muted text-[10px] sm:text-xs mt-1">позиций по всем рест.</p>
             </div>
-            <div className="p-2.5 rounded-xl bg-red-50">
-              <AlertTriangle size={20} className="text-brand-red" />
+            <div className="p-2 sm:p-2.5 rounded-xl bg-red-50">
+              <AlertTriangle size={16} className="text-brand-red sm:hidden" />
+              <AlertTriangle size={20} className="text-brand-red hidden sm:block" />
             </div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
         {/* Таблица ресторанов */}
-        <div className="card xl:col-span-2">
-          <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+        <div className="card xl:col-span-2 min-w-0">
+          <div className="px-4 sm:px-5 py-4 border-b border-brand-border flex items-center justify-between">
             <div>
               <h2 className="font-semibold text-brand-dark flex items-center gap-2">
                 <Store size={16} className="text-brand-yellow" />
@@ -541,7 +574,7 @@ function AdminDashboard({ data, onRefreshRestaurant, onRefreshAll, refreshingId,
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-brand-border">
-                    {["Ресторан", "Waste %", "vs пред. мес.", "Тренд", "Сверх нормы", "К спис.", ""].map(h => (
+                    {["Ресторан", "Stat Lost %", "Waste %", "vs пред. мес.", "Продажи без НДС", "Сверх нормы", ""].map(h => (
                       <th key={h} className="text-left py-2.5 px-4 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">
                         {h}
                       </th>
@@ -556,20 +589,19 @@ function AdminDashboard({ data, onRefreshRestaurant, onRefreshAll, refreshingId,
                     )}>
                       <td className="py-3 px-4">
                         <p className="font-medium text-brand-dark max-w-[140px] truncate">{r.restaurant_name}</p>
-                        <p className="text-brand-muted text-xs font-mono mt-0.5">{r.period}</p>
+                        <p className="text-brand-muted text-xs mt-0.5">{fmtPeriod(r.period)}</p>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={cn("text-sm font-semibold tabular-nums", r.shortage_pct > 0 ? "text-brand-red" : "text-brand-muted")}>
+                          {fmt(r.shortage_pct)}%
+                        </span>
                       </td>
                       <td className="py-3 px-4"><WasteBadge pct={r.waste_pct} /></td>
                       <td className="py-3 px-4"><DeltaBadge delta={r.delta_waste_pct ?? null} /></td>
-                      <td className="py-3 px-4"><MiniSparkline data={r.sparkline ?? []} /></td>
+                      <td className="py-3 px-4 tabular-nums text-sm text-brand-dark">{fmtMoney(r.revenue_sum)}</td>
                       <td className="py-3 px-4 tabular-nums text-xs font-medium">
                         {r.over_limit_count > 0
-                          ? <span className="text-brand-red">{r.over_limit_count}</span>
-                          : <span className="text-brand-muted">—</span>
-                        }
-                      </td>
-                      <td className="py-3 px-4 tabular-nums text-xs">
-                        {r.to_writeoff_qty > 0
-                          ? <span className="text-brand-yellow font-semibold">{Math.round(r.to_writeoff_qty)}</span>
+                          ? <span className="text-brand-red font-semibold">{r.over_limit_count}</span>
                           : <span className="text-brand-muted">—</span>
                         }
                       </td>
@@ -593,38 +625,108 @@ function AdminDashboard({ data, onRefreshRestaurant, onRefreshAll, refreshingId,
           )}
         </div>
 
-        {/* Топ проблемных продуктов */}
-        <div className="card">
-          <div className="px-5 py-4 border-b border-brand-border">
-            <h2 className="font-semibold text-brand-dark flex items-center gap-2">
-              <AlertTriangle size={16} className="text-brand-red" />
-              Топ проблемных позиций
-            </h2>
-            <p className="text-xs text-brand-muted mt-0.5">Сверх нормы · к списанию за период</p>
-          </div>
-          {!data.top_products?.length ? (
-            <div className="flex flex-col items-center justify-center py-12 text-brand-muted">
-              <CheckCircle2 size={28} className="text-green-400 mb-2" />
-              <p className="text-sm">Нет превышений</p>
+        {/* Правая колонка: Топ инвентаризации + Топ сверх нормы */}
+        <div className="space-y-6">
+
+          {/* Топ инвентаризации */}
+          <div className="card">
+            <div className="px-5 py-4 border-b border-brand-border">
+              <h2 className="font-semibold text-brand-dark flex items-center gap-2">
+                <BarChart3 size={16} className="text-brand-yellow" />
+                Топ по инвентаризации
+              </h2>
+              <p className="text-xs text-brand-muted mt-0.5">По всем ресторанам за период</p>
             </div>
-          ) : (
-            <div className="divide-y divide-brand-border/40">
-              {data.top_products.map((p, i) => (
-                <div key={p.product_name} className="flex items-center justify-between px-5 py-3 hover:bg-brand-bg/60 transition-colors">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-brand-muted text-xs font-mono w-4 flex-shrink-0">{i + 1}</span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-brand-dark truncate max-w-[160px]">{p.product_name}</p>
-                      <p className="text-xs text-brand-muted">{p.restaurant_count} рест.</p>
+
+            {/* Минус — красные */}
+            <div className="px-5 pt-3 pb-1">
+              <p className="text-xs font-semibold text-brand-red uppercase tracking-wide mb-1 flex items-center gap-1">
+                <TrendingDown size={12} /> Недостача (минус)
+              </p>
+            </div>
+            {!data.top_shortage?.length ? (
+              <div className="px-5 pb-3 text-xs text-brand-muted">Нет данных</div>
+            ) : (
+              <div className="divide-y divide-brand-border/30 mb-2">
+                {data.top_shortage.map((p, i) => (
+                  <div key={p.product_name} className="flex items-center justify-between px-5 py-2 hover:bg-red-50/40 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-brand-muted text-xs font-mono w-4 flex-shrink-0">{i + 1}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-brand-dark truncate max-w-[160px]">{p.product_name}</p>
+                        <p className="text-xs text-brand-muted">{p.restaurant_count} рест.</p>
+                      </div>
                     </div>
+                    <span className="text-sm font-bold text-brand-red flex-shrink-0 ml-2">
+                      {p.total_inv.toFixed(3)}
+                    </span>
                   </div>
-                  <span className="text-sm font-bold text-brand-red flex-shrink-0 ml-2">
-                    {Math.round(p.total_to_writeoff)} шт
-                  </span>
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
+
+            {/* Плюс — зелёные */}
+            <div className="px-5 pt-2 pb-1 border-t border-brand-border/40">
+              <p className="text-xs font-semibold text-green-600 uppercase tracking-wide mb-1 flex items-center gap-1">
+                <TrendingUp size={12} /> Излишек (плюс)
+              </p>
             </div>
-          )}
+            {!data.top_surplus?.length ? (
+              <div className="px-5 pb-3 text-xs text-brand-muted">Нет данных</div>
+            ) : (
+              <div className="divide-y divide-brand-border/30">
+                {data.top_surplus.map((p, i) => (
+                  <div key={p.product_name} className="flex items-center justify-between px-5 py-2 hover:bg-green-50/40 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-brand-muted text-xs font-mono w-4 flex-shrink-0">{i + 1}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-brand-dark truncate max-w-[160px]">{p.product_name}</p>
+                        <p className="text-xs text-brand-muted">{p.restaurant_count} рест.</p>
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold text-green-600 flex-shrink-0 ml-2">
+                      +{p.total_inv.toFixed(3)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Топ сверх нормы */}
+          <div className="card">
+            <div className="px-5 py-4 border-b border-brand-border">
+              <h2 className="font-semibold text-brand-dark flex items-center gap-2">
+                <AlertTriangle size={16} className="text-orange-500" />
+                Топ сверх нормы
+              </h2>
+              <p className="text-xs text-brand-muted mt-0.5">По всем ресторанам за период</p>
+            </div>
+            {!data.top_over_limit?.length ? (
+              <div className="flex flex-col items-center justify-center py-8 text-brand-muted">
+                <CheckCircle2 size={24} className="text-green-400 mb-2" />
+                <p className="text-sm">Нет превышений</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-brand-border/40">
+                {data.top_over_limit.map((p, i) => (
+                  <div key={p.product_name} className="flex items-center justify-between px-5 py-2 hover:bg-orange-50/40 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-brand-muted text-xs font-mono w-4 flex-shrink-0">{i + 1}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-brand-dark truncate max-w-[160px]">{p.product_name}</p>
+                        <p className="text-xs text-brand-muted">{p.restaurant_count} рест.</p>
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold text-orange-500 flex-shrink-0 ml-2">
+                      {p.total_inv.toFixed(3)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
         </div>
 
       </div>
@@ -773,18 +875,31 @@ export default function DashboardPage() {
     setSelectedWeek(null)
   }
 
+  // Swipe left/right для смены месяца
+  const touchStartX = useRef<number>(0)
+  const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const diff = touchStartX.current - e.changedTouches[0].clientX
+    if (Math.abs(diff) < 60) return
+    if (diff > 0 && !isCurrent) handleMonthChange(nextMonth(month))
+    else if (diff < 0) handleMonthChange(prevMonth(month))
+  }
+
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-brand-dark">
+          <h1 className="text-xl sm:text-2xl font-bold text-brand-dark">
             {isStore ? myMetric?.restaurant_name ?? "Дашборд" : "Дашборд"}
           </h1>
           <p className="text-brand-muted mt-1 text-sm">
             {new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Переключатель месяца */}
           <div className="flex items-center gap-1 bg-white border border-brand-border rounded-lg px-1 py-1">
             <button
@@ -793,7 +908,7 @@ export default function DashboardPage() {
             >
               <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
             </button>
-            <span className="text-sm font-medium text-brand-dark px-2 min-w-[110px] text-center">
+            <span className="text-sm font-medium text-brand-dark px-2 min-w-[100px] text-center">
               {monthLabel(month)}
               {isCurrent && <span className="ml-1 text-xs text-brand-yellow font-normal">(тек.)</span>}
             </span>

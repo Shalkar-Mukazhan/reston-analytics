@@ -253,19 +253,32 @@ export default function PlanningPage() {
   }
 
   const today = todayStr()
-
-  // Определяем будущий ли выбранный месяц
   const isFutureMonth = month > currentMonth()
 
+  // Swipe left/right для смены месяца
+  const touchStartX = useRef<number>(0)
+  const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const diff = touchStartX.current - e.changedTouches[0].clientX
+    if (Math.abs(diff) < 60) return
+    const allMonths = buildMonthsList() // sorted newest first
+    const idx = allMonths.indexOf(month)
+    if (diff > 0 && idx > 0) setMonth(allMonths[idx - 1])      // swipe left = newer month
+    else if (diff < 0 && idx < allMonths.length - 1) setMonth(allMonths[idx + 1]) // swipe right = older
+  }
+
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
 
       {/* Заголовок */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-brand-dark">Планирование продаж</h1>
-          <p className="text-brand-muted mt-0.5 text-sm">
-            Авто-план · взвешенное среднее 8 последних таких же дней недели
+          <h1 className="text-xl sm:text-2xl font-bold text-brand-dark">Планирование продаж</h1>
+          <p className="text-brand-muted mt-0.5 text-xs sm:text-sm">
+            Авто-план · взвешенное среднее 8 последних таких же дней
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -273,7 +286,7 @@ export default function PlanningPage() {
             <select
               value={restaurantId ?? ""}
               onChange={e => setRestaurantId(Number(e.target.value))}
-              className="h-9 px-3 rounded-lg border border-brand-border bg-white text-sm text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-yellow/40"
+              className="h-9 px-3 rounded-lg border border-brand-border bg-white text-sm text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-yellow/40 flex-1 sm:flex-none"
             >
               {restaurants.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
@@ -301,7 +314,7 @@ export default function PlanningPage() {
             title="Загрузить историю из IIKO (последние 3 месяца) и сгенерировать планы"
           >
             {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} className="text-brand-yellow" />}
-            Синхронизировать IIKO
+            <span className="hidden sm:inline">Синхронизировать </span>IIKO
           </button>
           <button
             onClick={regeneratePlans}
@@ -309,7 +322,7 @@ export default function PlanningPage() {
             className="h-9 px-3 rounded-lg border border-brand-border bg-white text-sm flex items-center gap-2 hover:border-brand-yellow transition-colors disabled:opacity-50"
           >
             <Target size={14} className="text-brand-yellow" />
-            Пересчитать планы
+            <span className="hidden sm:inline">Пересчитать </span>Планы
           </button>
         </div>
       </div>
@@ -345,39 +358,39 @@ export default function PlanningPage() {
       ) : !data ? null : (
         <>
           {/* Карточки сверху */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="card p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <TrendingUp size={16} className="text-green-500" />
-                <h2 className="font-semibold text-brand-dark text-sm">Факт за {monthLabel(month)}</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div className="card p-3 sm:p-5">
+              <div className="flex items-center gap-2 mb-2 sm:mb-3">
+                <TrendingUp size={15} className="text-green-500 flex-shrink-0" />
+                <h2 className="font-semibold text-brand-dark text-xs sm:text-sm leading-tight">Факт {monthLabel(month)}</h2>
               </div>
-              <p className="text-3xl font-bold text-brand-dark">{fmtMoney(data.fact_totals.sales_sum)}</p>
-              <div className="flex gap-6 mt-2">
+              <p className="text-lg sm:text-3xl font-bold text-brand-dark tabular-nums">{fmtMoney(data.fact_totals.sales_sum)}</p>
+              <div className="flex gap-4 sm:gap-6 mt-1.5 sm:mt-2">
                 <div>
-                  <p className="text-brand-muted text-xs">Чеков</p>
-                  <p className="font-semibold text-brand-dark">{fmt(data.fact_totals.gc_sum)}</p>
+                  <p className="text-brand-muted text-[10px] sm:text-xs">Чеков</p>
+                  <p className="font-semibold text-brand-dark text-xs sm:text-sm">{fmt(data.fact_totals.gc_sum)}</p>
                 </div>
                 <div>
-                  <p className="text-brand-muted text-xs">Ср. чек</p>
-                  <p className="font-semibold text-brand-dark">{fmtFull(data.fact_totals.av_check)}</p>
+                  <p className="text-brand-muted text-[10px] sm:text-xs">Ср. чек</p>
+                  <p className="font-semibold text-brand-dark text-xs sm:text-sm">{fmtMoney(data.fact_totals.av_check)}</p>
                 </div>
               </div>
             </div>
 
-            <div className="card p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <Target size={16} className="text-blue-500" />
-                <h2 className="font-semibold text-brand-dark text-sm">Авто-план за {monthLabel(month)}</h2>
+            <div className="card p-3 sm:p-5">
+              <div className="flex items-center gap-2 mb-2 sm:mb-3">
+                <Target size={15} className="text-blue-500 flex-shrink-0" />
+                <h2 className="font-semibold text-brand-dark text-xs sm:text-sm leading-tight">Авто-план {monthLabel(month)}</h2>
               </div>
               {data.has_plans ? (
                 <>
-                  <p className="text-3xl font-bold text-brand-dark">{fmtMoney(data.plan_totals.sales_sum)}</p>
-                  <p className="text-brand-muted text-xs mt-2">Сумма авто-планов по дням</p>
+                  <p className="text-lg sm:text-3xl font-bold text-brand-dark tabular-nums">{fmtMoney(data.plan_totals.sales_sum)}</p>
+                  <p className="text-brand-muted text-[10px] sm:text-xs mt-1.5 sm:mt-2">Сумма по дням</p>
                 </>
               ) : (
-                <div className="text-brand-muted text-sm pt-2">
-                  <p>Нет данных для расчёта.</p>
-                  <p className="text-xs mt-1">Нажмите «Синхронизировать IIKO».</p>
+                <div className="text-brand-muted text-xs sm:text-sm pt-2">
+                  <p>Нет данных.</p>
+                  <p className="text-[10px] sm:text-xs mt-1">Синхронизируйте IIKO.</p>
                 </div>
               )}
             </div>
@@ -385,11 +398,14 @@ export default function PlanningPage() {
 
           {/* Таблица по дням */}
           <div className="card overflow-hidden">
-            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+            <div className="px-4 sm:px-5 py-4 border-b border-brand-border flex items-center justify-between">
               <h2 className="font-semibold text-brand-dark">{monthLabel(month)}</h2>
-              <p className="text-xs text-brand-muted">Нажмите на ячейку плана чтобы изменить</p>
+              <p className="text-xs text-brand-muted hidden sm:block">Нажмите на ячейку плана чтобы изменить</p>
+              <p className="text-xs text-brand-muted sm:hidden">Нажмите на план для изменения</p>
             </div>
-            <div className="overflow-x-auto">
+
+            {/* Desktop: таблица */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-brand-border bg-brand-bg/50">
@@ -407,7 +423,6 @@ export default function PlanningPage() {
                 <tbody>
                   {data.days.map(d => {
                     const canEdit = d.date >= today
-                    // Авто-расчёт ср. чека плана если не пришёл с бэка
                     const avCheckPlan = d.av_check_plan ??
                       (d.sales_plan && d.gc_plan && d.gc_plan > 0
                         ? Math.round(d.sales_plan / d.gc_plan)
@@ -432,62 +447,32 @@ export default function PlanningPage() {
                           {d.is_today && <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded bg-brand-yellow text-brand-dark text-[10px] font-bold leading-none">сегодня</span>}
                         </td>
                         <td className="py-2 px-3 text-brand-muted text-xs">{d.weekday}</td>
-
-                        {/* План продажи — редактируемый */}
                         <td className="py-1.5 px-3 text-blue-600 w-[140px]">
-                          <EditableCell
-                            value={d.sales_plan}
-                            disabled={!canEdit}
-                            isManual={d.is_manual}
-                            fullFormat
-                            onSave={v => saveDailyPlan(d.date, "sales_plan", v)}
-                          />
+                          <EditableCell value={d.sales_plan} disabled={!canEdit} isManual={d.is_manual} fullFormat onSave={v => saveDailyPlan(d.date, "sales_plan", v)} />
                         </td>
-
-                        {/* Факт продажи */}
                         <td className="py-2 px-3 tabular-nums text-xs font-medium text-brand-dark">
                           {d.sales_fact != null ? fmtFull(d.sales_fact) : "—"}
                         </td>
-
-                        {/* % выполнения */}
                         <td className="py-2 px-3">
                           {d.pct_done != null ? (
                             <span className={cn(
                               "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs font-semibold",
-                              d.pct_done >= 100
-                                ? "bg-green-100 text-green-700"
-                                : "bg-red-100 text-brand-red"
+                              d.pct_done >= 100 ? "bg-green-100 text-green-700" : "bg-red-100 text-brand-red"
                             )}>
-                              {d.pct_done >= 100
-                                ? <CheckCircle2 size={10} />
-                                : <AlertTriangle size={10} />}
+                              {d.pct_done >= 100 ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
                               {fmt(d.pct_done, 1)}%
                             </span>
                           ) : "—"}
                         </td>
-
-                        {/* План GC — редактируемый */}
                         <td className="py-1.5 px-3 text-blue-600 w-[80px]">
-                          <EditableCell
-                            value={d.gc_plan}
-                            disabled={!canEdit}
-                            isManual={d.is_manual}
-                            isInt
-                            onSave={v => saveDailyPlan(d.date, "gc_plan", Math.round(v))}
-                          />
+                          <EditableCell value={d.gc_plan} disabled={!canEdit} isManual={d.is_manual} isInt onSave={v => saveDailyPlan(d.date, "gc_plan", Math.round(v))} />
                         </td>
-
-                        {/* Факт GC */}
                         <td className="py-2 px-3 tabular-nums text-xs text-brand-dark">
                           {d.gc_fact != null ? fmt(d.gc_fact) : "—"}
                         </td>
-
-                        {/* Ср. чек план — авто */}
                         <td className="py-2 px-3 tabular-nums text-xs text-blue-500">
                           {avCheckPlan != null ? fmtFull(avCheckPlan) : "—"}
                         </td>
-
-                        {/* Ср. чек факт */}
                         <td className="py-2 px-3 tabular-nums text-xs text-brand-muted">
                           {d.av_check_fact != null ? fmtFull(d.av_check_fact) : "—"}
                         </td>
@@ -496,6 +481,106 @@ export default function PlanningPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile: карточки на каждый день */}
+            <div className="sm:hidden divide-y divide-brand-border/30">
+              {data.days.map(d => {
+                const canEdit = d.date >= today
+                const avCheckPlan = d.av_check_plan ??
+                  (d.sales_plan && d.gc_plan && d.gc_plan > 0
+                    ? Math.round(d.sales_plan / d.gc_plan)
+                    : null)
+                const [, , dd] = d.date.split("-").map(Number)
+                const mo = parseInt(d.date.split("-")[1]) - 1
+                const dateLabel = `${dd} ${MONTHS_RU_GENITIVE[mo]}`
+
+                return (
+                  <div
+                    key={d.date}
+                    className={cn(
+                      "px-4 py-3",
+                      d.is_today ? "bg-brand-yellow/10" :
+                      d.is_holiday ? "opacity-50" :
+                      d.is_future ? "opacity-60" : ""
+                    )}
+                  >
+                    {/* Строка 1: дата + день + % выполнения */}
+                    <div className="flex items-center justify-between mb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-brand-dark text-sm">{dateLabel}</span>
+                        <span className="text-brand-muted text-xs">{d.weekday.slice(0, 2)}</span>
+                        {d.is_today && (
+                          <span className="px-1.5 py-0.5 rounded bg-brand-yellow text-brand-dark text-[10px] font-bold leading-none">сегодня</span>
+                        )}
+                      </div>
+                      {d.pct_done != null && (
+                        <span className={cn(
+                          "inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold",
+                          d.pct_done >= 100 ? "bg-green-100 text-green-700" : "bg-red-100 text-brand-red"
+                        )}>
+                          {d.pct_done >= 100 ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
+                          {fmt(d.pct_done, 1)}%
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Строка 2: Продажи план | факт */}
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                      <div>
+                        <p className="text-[10px] text-brand-muted uppercase tracking-wide mb-0.5">План продажи</p>
+                        <div className="text-blue-600 font-medium text-sm">
+                          <EditableCell
+                            value={d.sales_plan}
+                            disabled={!canEdit}
+                            isManual={d.is_manual}
+                            fullFormat
+                            onSave={v => saveDailyPlan(d.date, "sales_plan", v)}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-brand-muted uppercase tracking-wide mb-0.5">Факт продажи</p>
+                        <p className="text-sm font-medium text-brand-dark tabular-nums">
+                          {d.sales_fact != null ? fmtFull(d.sales_fact) : "—"}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[10px] text-brand-muted uppercase tracking-wide mb-0.5">План GC</p>
+                        <div className="text-blue-600 text-sm">
+                          <EditableCell
+                            value={d.gc_plan}
+                            disabled={!canEdit}
+                            isManual={d.is_manual}
+                            isInt
+                            onSave={v => saveDailyPlan(d.date, "gc_plan", Math.round(v))}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-brand-muted uppercase tracking-wide mb-0.5">Факт GC</p>
+                        <p className="text-sm text-brand-dark tabular-nums">
+                          {d.gc_fact != null ? fmt(d.gc_fact) : "—"}
+                        </p>
+                      </div>
+
+                      {(avCheckPlan != null || d.av_check_fact != null) && (
+                        <>
+                          <div>
+                            <p className="text-[10px] text-brand-muted uppercase tracking-wide mb-0.5">Ср. чек план</p>
+                            <p className="text-xs text-blue-500 tabular-nums">{avCheckPlan != null ? fmtFull(avCheckPlan) : "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-brand-muted uppercase tracking-wide mb-0.5">Ср. чек факт</p>
+                            <p className="text-xs text-brand-muted tabular-nums">{d.av_check_fact != null ? fmtFull(d.av_check_fact) : "—"}</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
         </>

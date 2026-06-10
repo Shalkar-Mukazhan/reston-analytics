@@ -106,12 +106,12 @@ function KpiCard({ label, value, sub, color = "default", icon }: {
 }) {
   const textColor = { red: "text-brand-red", green: "text-green-600", blue: "text-blue-600", default: "text-brand-dark" }[color]
   return (
-    <div className="card p-5 flex items-start gap-4">
-      {icon && <div className="mt-0.5 flex-shrink-0">{icon}</div>}
+    <div className="card p-3 sm:p-5 flex items-start gap-2 sm:gap-4">
+      {icon && <div className="mt-0.5 flex-shrink-0 hidden sm:block">{icon}</div>}
       <div className="min-w-0">
-        <p className="text-brand-muted text-xs uppercase tracking-wide mb-1">{label}</p>
-        <p className={cn("text-2xl font-bold", textColor)}>{value}</p>
-        {sub && <p className="text-brand-muted text-xs mt-1">{sub}</p>}
+        <p className="text-brand-muted text-[10px] sm:text-xs uppercase tracking-wide mb-1 leading-tight">{label}</p>
+        <p className={cn("text-base sm:text-2xl font-bold tabular-nums", textColor)}>{value}</p>
+        {sub && <p className="text-brand-muted text-[10px] sm:text-xs mt-1 leading-tight">{sub}</p>}
       </div>
     </div>
   )
@@ -121,10 +121,12 @@ function KpiCard({ label, value, sub, color = "default", icon }: {
 function MonthTable({ months }: { months: MonthPoint[] }) {
   return (
     <div className="card overflow-hidden">
-      <div className="px-5 py-4 border-b border-brand-border">
+      <div className="px-4 sm:px-5 py-4 border-b border-brand-border">
         <h2 className="font-semibold text-brand-dark">Детализация по месяцам</h2>
       </div>
-      <div className="overflow-x-auto">
+
+      {/* Desktop: таблица */}
+      <div className="hidden sm:block overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-brand-border bg-brand-bg/50">
@@ -167,6 +169,50 @@ function MonthTable({ months }: { months: MonthPoint[] }) {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Mobile: карточки */}
+      <div className="sm:hidden divide-y divide-brand-border/40">
+        {months.map((m) => (
+          <div key={m.month} className={cn(
+            "px-4 py-3",
+            !m.has_data ? "opacity-40" : m.waste_pct > WASTE_LIMIT ? "bg-red-50/40" : ""
+          )}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-semibold text-brand-dark text-sm">{m.month_name}</span>
+              {m.has_data ? (
+                <span className={cn(
+                  "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold",
+                  m.waste_pct > WASTE_LIMIT ? "bg-red-100 text-brand-red" : "bg-green-100 text-green-700"
+                )}>
+                  {m.waste_pct > WASTE_LIMIT ? <AlertTriangle size={10} /> : <CheckCircle2 size={10} />}
+                  Waste {fmt(m.waste_pct)}%
+                </span>
+              ) : <span className="text-brand-muted text-xs">Нет данных</span>}
+            </div>
+            {m.has_data && (
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div>
+                  <p className="text-brand-muted mb-0.5">Выручка</p>
+                  <p className="font-medium text-brand-dark tabular-nums">{fmtMoney(m.revenue_sum)}</p>
+                </div>
+                <div>
+                  <p className="text-brand-muted mb-0.5">Stat Lost</p>
+                  <p className="font-medium text-brand-red tabular-nums">{fmt(m.shortage_pct)}%</p>
+                  <p className="text-brand-muted tabular-nums">{fmtMoney(m.shortage_sum)}</p>
+                </div>
+                <div>
+                  <p className="text-brand-muted mb-0.5">C. Waste</p>
+                  <p className="font-medium text-blue-600 tabular-nums">{fmt(m.writeoff_pct)}%</p>
+                  <p className="text-brand-muted tabular-nums">{fmtMoney(m.complete_waste_sum)}</p>
+                </div>
+              </div>
+            )}
+            {m.has_data && m.over_limit_count > 0 && (
+              <p className="text-xs text-brand-red mt-1.5 font-medium">Сверх нормы: {m.over_limit_count}</p>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -243,7 +289,7 @@ export default function AnalyticsPage() {
   const chartMonths = data?.months ?? []
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
 
       {/* ── Заголовок ── */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -338,16 +384,16 @@ export default function AnalyticsPage() {
           </div>
 
           {/* ── График % ── */}
-          <div className="card p-5">
+          <div className="card p-4 sm:p-5">
             <div className="mb-4">
               <h2 className="font-semibold text-brand-dark">Динамика показателей, %</h2>
               <p className="text-xs text-brand-muted mt-0.5">Stat Lost %, Complete Waste %, Waste State % по месяцам · лимит {WASTE_LIMIT}%</p>
             </div>
-            <ResponsiveContainer width="100%" height={320}>
+            <ResponsiveContainer width="100%" height={220}>
               <LineChart data={chartMonths} margin={{ top: 8, right: 40, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="month_name" tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={45} />
+                <XAxis dataKey="month_name" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval={0} tickFormatter={v => v.slice(0, 3)} />
+                <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={38} />
                 <Tooltip content={<PctTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
                 <ReferenceLine
@@ -377,18 +423,18 @@ export default function AnalyticsPage() {
           </div>
 
           {/* ── График суммы ── */}
-          <div className="card p-5">
+          <div className="card p-4 sm:p-5">
             <div className="mb-4">
               <h2 className="font-semibold text-brand-dark">Суммы потерь по месяцам</h2>
               <p className="text-xs text-brand-muted mt-0.5">Stat Lost и Complete Waste в тенге</p>
             </div>
-            <ResponsiveContainer width="100%" height={280}>
+            <ResponsiveContainer width="100%" height={200}>
               <BarChart data={chartMonths} margin={{ top: 8, right: 20, left: 0, bottom: 0 }} barGap={4}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-                <XAxis dataKey="month_name" tick={{ fontSize: 12, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="month_name" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval={0} tickFormatter={v => v.slice(0, 3)} />
                 <YAxis
                   tickFormatter={v => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)}
-                  tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={50}
+                  tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={44}
                 />
                 <Tooltip content={<SumTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />

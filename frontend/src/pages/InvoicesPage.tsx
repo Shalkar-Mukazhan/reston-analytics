@@ -290,7 +290,7 @@ export default function InvoicesPage() {
     restaurants.find((r) => r.id === id)?.name ?? `#${id}`
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-brand-dark">Накладные</h1>
@@ -362,7 +362,7 @@ export default function InvoicesPage() {
 
       {/* Invoices list */}
       <div className="card">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-brand-border">
           <h2 className="font-semibold text-brand-dark flex items-center gap-2">
             <FileInput size={16} className="text-brand-yellow" />
             История накладных
@@ -388,68 +388,120 @@ export default function InvoicesPage() {
             <p className="text-xs mt-1">Загрузите первый файл Excel выше</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-brand-border">
-                  {["#", "Ресторан", "Поставщик", "Дата накладной", "Сумма с НДС", "Загружен", ""].map((h) => (
-                    <th key={h} className="text-left py-3 px-5 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((inv) => (
-                  <tr key={inv.id} className="border-b border-brand-border/50 hover:bg-brand-bg/60 transition-colors">
-                    <td className="py-3 px-5 text-brand-muted font-mono text-xs">{inv.id}</td>
-                    <td className="py-3 px-5 font-medium text-brand-dark">
-                      <span className="flex items-center gap-1.5">
-                        <Building2 size={13} className="text-brand-muted" />
-                        {restaurantName(inv.restaurant_id)}
-                      </span>
-                    </td>
-                    <td className="py-3 px-5 text-brand-muted">{inv.supplier_name ?? "—"}</td>
-                    <td className="py-3 px-5 text-brand-dark">{formatDate(inv.invoice_date)}</td>
-                    <td className="py-3 px-5 font-medium text-brand-dark tabular-nums">
-                      {inv.total_sum_vat != null
-                        ? `${inv.total_sum_vat.toLocaleString("ru-RU", { minimumFractionDigits: 2 })} ₸`
-                        : "—"}
-                    </td>
-                    <td className="py-3 px-5 text-brand-muted text-xs whitespace-nowrap">
-                      {new Date(inv.uploaded_at).toLocaleString("ru-RU")}
-                    </td>
-                    <td className="py-3 px-5">
-                      <div className="flex items-center gap-2 justify-end">
-                        <button
-                          className="btn-secondary text-xs py-1 px-2.5"
-                          onClick={() => setSelectedInvoice(inv)}
-                        >
-                          <ChevronRight size={13} />
-                          Позиции
-                        </button>
-                        {inv.status !== "sent" && (
-                          <button
-                            className="btn-primary text-xs py-1 px-2.5"
-                            onClick={() => setPostingInvoice(inv)}
-                          >
-                            <Send size={13} />
-                            В IIKO
-                          </button>
-                        )}
-                        {inv.status === "sent" && (
-                          <span className="badge-ok inline-flex items-center gap-1 text-xs">
-                            <CheckCircle2 size={11} />
-                            Отправлено
-                          </span>
-                        )}
-                      </div>
-                    </td>
+          <>
+            {/* Desktop: таблица */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-brand-border">
+                    {["#", "Ресторан", "Поставщик", "Дата накладной", "Сумма с НДС", "Загружен", ""].map((h) => (
+                      <th key={h} className="text-left py-3 px-5 text-brand-muted font-medium text-xs uppercase tracking-wide whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {invoices.map((inv) => (
+                    <tr key={inv.id} className="border-b border-brand-border/50 hover:bg-brand-bg/60 transition-colors">
+                      <td className="py-3 px-5 text-brand-muted font-mono text-xs">{inv.id}</td>
+                      <td className="py-3 px-5 font-medium text-brand-dark">
+                        <span className="flex items-center gap-1.5">
+                          <Building2 size={13} className="text-brand-muted" />
+                          {restaurantName(inv.restaurant_id)}
+                        </span>
+                      </td>
+                      <td className="py-3 px-5 text-brand-muted">{inv.supplier_name ?? "—"}</td>
+                      <td className="py-3 px-5 text-brand-dark">{formatDate(inv.invoice_date)}</td>
+                      <td className="py-3 px-5 font-medium text-brand-dark tabular-nums">
+                        {inv.total_sum_vat != null
+                          ? `${inv.total_sum_vat.toLocaleString("ru-RU", { minimumFractionDigits: 2 })} ₸`
+                          : "—"}
+                      </td>
+                      <td className="py-3 px-5 text-brand-muted text-xs whitespace-nowrap">
+                        {new Date(inv.uploaded_at).toLocaleString("ru-RU")}
+                      </td>
+                      <td className="py-3 px-5">
+                        <div className="flex items-center gap-2 justify-end">
+                          <button className="btn-secondary text-xs py-1 px-2.5" onClick={() => setSelectedInvoice(inv)}>
+                            <ChevronRight size={13} />Позиции
+                          </button>
+                          {inv.status !== "sent" && (
+                            <button className="btn-primary text-xs py-1 px-2.5" onClick={() => setPostingInvoice(inv)}>
+                              <Send size={13} />В IIKO
+                            </button>
+                          )}
+                          {inv.status === "sent" && (
+                            <span className="badge-ok inline-flex items-center gap-1 text-xs">
+                              <CheckCircle2 size={11} />Отправлено
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile: карточки */}
+            <div className="sm:hidden divide-y divide-brand-border/40">
+              {invoices.map((inv) => (
+                <div key={inv.id} className="px-4 py-3.5">
+                  {/* Строка 1: ресторан + сумма */}
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <div className="min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        <Building2 size={13} className="text-brand-muted flex-shrink-0" />
+                        <p className="font-semibold text-brand-dark text-sm truncate">{restaurantName(inv.restaurant_id)}</p>
+                      </span>
+                      <p className="text-brand-muted text-xs mt-0.5 pl-[18px]">{inv.supplier_name ?? "Поставщик не указан"}</p>
+                    </div>
+                    {inv.total_sum_vat != null ? (
+                      <p className="font-bold text-brand-dark text-sm tabular-nums flex-shrink-0">
+                        {inv.total_sum_vat.toLocaleString("ru-RU", { minimumFractionDigits: 0 })} ₸
+                      </p>
+                    ) : (
+                      <p className="text-brand-muted text-sm">—</p>
+                    )}
+                  </div>
+
+                  {/* Строка 2: дата накладной + дата загрузки */}
+                  <div className="flex items-center gap-3 mb-3 pl-[18px]">
+                    <p className="text-xs text-brand-muted">
+                      Накладная: <span className="text-brand-dark font-medium">{formatDate(inv.invoice_date)}</span>
+                    </p>
+                    <span className="text-brand-border">·</span>
+                    <p className="text-xs text-brand-muted">
+                      {new Date(inv.uploaded_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+
+                  {/* Строка 3: кнопки */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium text-brand-dark border border-brand-border rounded-lg py-2 hover:bg-brand-bg transition-colors"
+                      onClick={() => setSelectedInvoice(inv)}
+                    >
+                      <ChevronRight size={13} />Позиции
+                    </button>
+                    {inv.status !== "sent" ? (
+                      <button
+                        className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-brand-yellow text-brand-dark rounded-lg py-2 hover:brightness-95 transition-all"
+                        onClick={() => setPostingInvoice(inv)}
+                      >
+                        <Send size={13} />В IIKO
+                      </button>
+                    ) : (
+                      <span className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-green-50 text-green-700 border border-green-200 rounded-lg py-2">
+                        <CheckCircle2 size={13} />Отправлено
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 

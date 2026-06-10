@@ -1,0 +1,25 @@
+{
+  "name": "RestOn Analytics",
+  "short_name": "RestOn",
+  "description": "Аналитика и контроль ресторанов",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a1f2e",
+  "theme_color": "#FDB714",
+  "icons": [
+    {
+      "src": "/icon.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}

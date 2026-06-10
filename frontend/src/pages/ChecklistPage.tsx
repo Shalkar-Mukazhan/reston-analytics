@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { ExternalLink, TableProperties, Info, FileDown, PlayCircle, CheckCircle2, Clock } from "lucide-react"
+import { ExternalLink, TableProperties, Info, FileDown, PlayCircle, CheckCircle2, Clock, Trash2 } from "lucide-react"
 import { useAuth } from "../hooks/useAuth"
 import api from "../api/client"
 
@@ -29,6 +29,8 @@ export default function ChecklistPage() {
   const { user } = useAuth()
   const [statuses, setStatuses] = useState<DayStatus[]>([])
   const [starting, setStarting] = useState(false)
+  const [startingRestaurant, setStartingRestaurant] = useState<number | null>(null)
+  const [clearingRestaurant, setClearingRestaurant] = useState<number | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
 
   const restaurants = user?.restaurants ?? []
@@ -56,13 +58,42 @@ export default function ChecklistPage() {
     }
   }
 
+  const handleStartDayForRestaurant = async (restaurantId: number, name: string) => {
+    setStartingRestaurant(restaurantId)
+    setMsg(null)
+    try {
+      const res = await api.post(`/checklist/start-day/${restaurantId}`)
+      const r = await api.get("/checklist/status")
+      setStatuses(r.data)
+      setMsg(`${name}: ${res.data.message}`)
+    } catch (e: any) {
+      setMsg(`${name}: ${e.response?.data?.detail || "Ошибка при запуске"}`)
+    } finally {
+      setStartingRestaurant(null)
+    }
+  }
+
+  const handleClearSheets = async (restaurantId: number, name: string) => {
+    if (!confirm(`Очистить Google Sheets для "${name}"?\n\nЧекбоксы → сняты, обеденные ячейки → пусто.`)) return
+    setClearingRestaurant(restaurantId)
+    setMsg(null)
+    try {
+      const res = await api.post(`/checklist/clear/${restaurantId}`)
+      setMsg(`${name}: ${res.data.message}`)
+    } catch (e: any) {
+      setMsg(`${name}: ${e.response?.data?.detail || "Ошибка при очистке"}`)
+    } finally {
+      setClearingRestaurant(null)
+    }
+  }
+
   if (user?.role === "store") {
     const rest = restaurants[0]
     const url = rest?.google_sheet_url
     const status = getStatus(rest?.id)
 
     return (
-      <div className="p-6 max-w-2xl mx-auto">
+      <div className="p-4 sm:p-6 max-w-2xl mx-auto">
         <div className="flex items-center gap-3 mb-8">
           <div className="w-10 h-10 rounded-xl bg-brand-yellow/10 flex items-center justify-center">
             <TableProperties size={20} className="text-brand-yellow" />
@@ -142,6 +173,14 @@ export default function ChecklistPage() {
                   Скачать PDF
                   <FileDown size={15} />
                 </a>
+                <button
+                  onClick={() => handleClearSheets(rest.id, rest.name)}
+                  disabled={clearingRestaurant === rest.id}
+                  className="btn-secondary gap-2 px-6 py-2.5 text-red-600 border-red-200 hover:bg-red-50"
+                >
+                  <Trash2 size={15} />
+                  {clearingRestaurant === rest.id ? "Очищаем..." : "Очистить"}
+                </button>
               </div>
             </div>
           </div>
@@ -165,7 +204,7 @@ export default function ChecklistPage() {
   const withoutLinks = restaurants.filter(r => !r.google_sheet_url)
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-yellow/10 flex items-center justify-center">
@@ -212,6 +251,24 @@ export default function ChecklistPage() {
                   </div>
                 </div>
                 <div className="flex gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => handleStartDayForRestaurant(r.id, r.name)}
+                    disabled={startingRestaurant === r.id}
+                    className="btn-primary gap-1.5 text-sm py-1.5"
+                    title="Начать новый день для этого ресторана"
+                  >
+                    <PlayCircle size={13} />
+                    {startingRestaurant === r.id ? "..." : "Новый день"}
+                  </button>
+                  <button
+                    onClick={() => handleClearSheets(r.id, r.name)}
+                    disabled={clearingRestaurant === r.id}
+                    className="btn-secondary gap-1.5 text-sm py-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                    title="Очистить чекбоксы и обеденные ячейки"
+                  >
+                    <Trash2 size={13} />
+                    {clearingRestaurant === r.id ? "..." : "Очистить"}
+                  </button>
                   <a
                     href={r.google_sheet_url!}
                     target="_blank"

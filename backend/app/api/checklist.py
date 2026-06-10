@@ -70,6 +70,71 @@ def start_day(
     return {"ok": True, "started": started, "total_minutes": round(delay / 60, 1)}
 
 
+@router.post("/start-day/{restaurant_id}")
+def start_day_restaurant(
+    restaurant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Начать новый день для конкретного ресторана (только CO/admin).
+    Без ограничений — можно запускать несколько раз в день для тестирования.
+    """
+    from datetime import date as date_type
+    from app.tasks.checklist_tasks import start_day_sync_task
+
+    if current_user.role not in ("co", "admin"):
+        raise HTTPException(403, "Доступно только для CO/Admin")
+
+    restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
+    if not restaurant:
+        raise HTTPException(404, "Ресторан не найден")
+
+    if not restaurant.google_sheet_url:
+        raise HTTPException(400, "У ресторана не настроен Google Sheets URL")
+
+    # Обновляем дату (для консистентности)
+    restaurant.last_checklist_reset_date = date_type.today()
+    db.commit()
+
+    # Запускаем синхронизацию
+    start_day_sync_task.delay(restaurant.id)
+
+    return {
+        "ok": True,
+        "restaurant": restaurant.name,
+        "message": "Синхронизация запущена. Проверьте Google Sheets через 10-20 секунд."
+    }
+
+
+@router.post("/clear/{restaurant_id}")
+def clear_sheets_restaurant(
+    restaurant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Очищает Google Sheets ресторана (только CO/admin)."""
+    from app.tasks.checklist_tasks import clear_sheets_task
+
+    restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
+    if not restaurant:
+        raise HTTPException(404, "Ресторан не найден")
+
+    if current_user.role == "store":
+        allowed = [r.id for r in current_user.restaurants]
+        if restaurant_id not in allowed:
+            raise HTTPException(403, "Нет доступа к этому ресторану")
+    elif current_user.role not in ("co", "admin"):
+        raise HTTPException(403, "Нет доступа")
+
+    if not restaurant.google_sheet_url:
+        raise HTTPException(400, "У ресторана не настроен Google Sheets URL")
+
+    clear_sheets_task.delay(restaurant.id)
+    return {"ok": True, "restaurant": restaurant.name,
+            "message": "Очистка запущена. Проверьте Google Sheets через 10-20 секунд."}
+
+
 @router.get("/status")
 def checklist_status(
     db: Session = Depends(get_db),
@@ -345,9 +410,12 @@ def list_submissions(
         ChecklistSubmission.restaurant_id == restaurant_id
     )
     if month:
+        import calendar as _cal
+        year_m, mon_m = int(month[:4]), int(month[5:7])
+        last_day = _cal.monthrange(year_m, mon_m)[1]
         q = q.filter(
             ChecklistSubmission.date >= date.fromisoformat(f"{month}-01"),
-            ChecklistSubmission.date <= date.fromisoformat(f"{month}-28"),  # approximate
+            ChecklistSubmission.date <= date.fromisoformat(f"{month}-{last_day:02d}"),
         )
     subs = q.order_by(ChecklistSubmission.date.desc()).limit(60).all()
     return [_submission_dict(s) for s in subs]

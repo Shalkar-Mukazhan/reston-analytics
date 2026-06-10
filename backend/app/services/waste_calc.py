@@ -69,23 +69,21 @@ def calc_allowed_qty(row: pd.Series) -> float:
 
 def calc_to_writeoff(row: pd.Series) -> float:
     """
-    Кол-во к списанию.
-    Логика из app.py:
+    Кол-во к списанию — всегда с точностью до 3 знаков (без округления вниз до целых).
       - rate == 1 AND inventory < 0 → abs(inventory)
       - иначе → min(remaining_limit, inventory_minus)
     """
     rate = to_float(row.get("Норма %", 0)) / 100.0
     inventory_net = to_float(row.get("Инвентаризация", 0))
-    unit_type = str(row.get("Ед. изм.", ""))
-    inventory_minus = max(-inventory_net, 0.0)   # положительное если дефицит
+    inventory_minus = max(-inventory_net, 0.0)
 
     if rate == 1.0 and inventory_net < 0:
-        return round_by_unit(inventory_minus, unit_type)
+        return round(inventory_minus, 3)
 
     remaining_limit = to_float(row.get("Допустимо", 0)) - to_float(row.get("Уже списано", 0))
     remaining_limit = max(remaining_limit, 0.0)
 
-    return round_by_unit(min(remaining_limit, inventory_minus), unit_type)
+    return round(min(remaining_limit, inventory_minus), 3)
 
 
 def calc_written_off_percent(row: pd.Series) -> float:

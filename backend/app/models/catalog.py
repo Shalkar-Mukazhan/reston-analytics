@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, UniqueConstraint, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, UniqueConstraint, Boolean, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.core.database import Base
@@ -11,6 +11,7 @@ class AblProduct(Base):
     id                = Column(Integer, primary_key=True, index=True)
     abl_article       = Column(String(50),  unique=True, nullable=False, index=True)
     abl_main_article  = Column(String(50),  nullable=False, index=True)
+    iiko_article      = Column(String(100), nullable=True, index=True)
     name              = Column(String(300), nullable=False)
     supplier          = Column(String(255))
     price             = Column(Float)       # без НДС
@@ -55,9 +56,10 @@ class ProductCatalog(Base):
     product_article = Column(String(100), nullable=True, index=True)  # IIKO num/артикул — именно это OLAP возвращает в Product.Num
     name = Column(String(255), nullable=False)
     group_id   = Column(Integer, ForeignKey("product_groups.id"), nullable=True)
-    unit_type  = Column(String(100))
-    is_deleted = Column(Boolean, nullable=False, default=False)
-    updated_at = Column(DateTime(timezone=True))
+    unit_type   = Column(String(100))
+    containers  = Column(JSON, nullable=True)  # [{id, name, count, fullContainerWeight, deleted}]
+    is_deleted  = Column(Boolean, nullable=False, default=False)
+    updated_at  = Column(DateTime(timezone=True))
 
     group = relationship("ProductGroup", back_populates="products")
 
@@ -83,11 +85,32 @@ class Supplier(Base):
     """Поставщики из IIKO — нужны для отправки накладных"""
     __tablename__ = "suppliers"
 
-    id        = Column(Integer, primary_key=True, index=True)
-    iiko_uuid = Column(String(100), unique=True, nullable=False, index=True)
-    name      = Column(String(255), nullable=False)
+    id              = Column(Integer, primary_key=True, index=True)
+    iiko_uuid       = Column(String(100), unique=True, nullable=False, index=True)
+    iiko_code       = Column(String(50),  nullable=True)   # Таб.номер/Код — нужен для API прайс-листа
+    name            = Column(String(255), nullable=False)
+    taxpayer_id     = Column(String(50),  nullable=True, index=True)  # ИНН/БИН из iiko
 
-    invoices = relationship("Invoice", back_populates="supplier")
+    invoices         = relationship("Invoice", back_populates="supplier")
+    product_mappings = relationship("SupplierProductMapping", back_populates="supplier", cascade="all, delete-orphan")
+
+
+class SupplierProductMapping(Base):
+    """Маппинг кодов товаров поставщика → товары iiko (из прайс-листа iiko)."""
+    __tablename__ = "supplier_product_mappings"
+
+    id                    = Column(Integer, primary_key=True, index=True)
+    supplier_id           = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_product_code = Column(String(100), nullable=True, index=True)  # код у поставщика
+    supplier_product_name = Column(String(300), nullable=True)
+    iiko_product_id       = Column(String(100), nullable=False, index=True)  # UUID товара в iiko
+    iiko_product_name     = Column(String(300), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("supplier_id", "supplier_product_code", name="uq_supplier_product_code"),
+    )
+
+    supplier = relationship("Supplier", back_populates="product_mappings")
 
 
 class Invoice(Base):

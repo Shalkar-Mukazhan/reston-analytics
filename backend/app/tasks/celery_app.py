@@ -6,7 +6,7 @@ celery_app = Celery(
     "wastecontrol",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.report_tasks", "app.tasks.checklist_tasks"],
+    include=["app.tasks.report_tasks", "app.tasks.checklist_tasks", "app.tasks.co_tasks"],
 )
 
 celery_app.conf.update(
@@ -23,15 +23,21 @@ celery_app.conf.update(
         },
         # Чек-листы: каждый час → факт из IIKO → Google Sheets
         # В 07:00 Алматы дополнительно: очистка + план
+        # Запускаем в :03 а не :00 — даём IIKO 3 минуты закрыть транзакции прошлого часа
         "checklist-hourly-sync": {
             "task": "app.tasks.checklist_tasks.sync_checklist_hourly",
-            "schedule": crontab(minute=0),   # каждый час в 00 минут
+            "schedule": crontab(minute=3),
         },
         # Планирование: каждый час → sales_daily_facts для ВСЕХ ресторанов
         # Redis-кеш гарантирует отсутствие повторных запросов к IIKO
         "planning-facts-hourly-sync": {
             "task": "app.tasks.checklist_tasks.sync_planning_facts_hourly",
-            "schedule": crontab(minute=5),   # в :05 каждого часа (после чек-листа)
+            "schedule": crontab(minute=8),   # в :08 каждого часа (после чек-листа)
+        },
+        # CO: удаление накладных за предыдущие дни — каждый день в 00:00
+        "co-purge-old-invoices": {
+            "task": "app.tasks.co_tasks.purge_old_co_invoices",
+            "schedule": crontab(hour=0, minute=0),
         },
     },
 )

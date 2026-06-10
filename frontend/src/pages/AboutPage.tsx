@@ -38,7 +38,7 @@ const modules = [
 
 export default function AboutPage() {
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-3 mb-8">
         <div className="w-10 h-10 rounded-xl bg-brand-yellow/10 flex items-center justify-center">
@@ -46,15 +46,15 @@ export default function AboutPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-brand-dark">О системе</h1>
-          <p className="text-brand-muted text-sm">Reston Analytics</p>
+          <p className="text-brand-muted text-sm">RestOn Analytics</p>
         </div>
       </div>
 
       {/* Logo + description */}
       <div className="card p-8 flex flex-col sm:flex-row items-center gap-6 mb-6">
-        <img src="/forwhite.png" alt="Reston Analytics" className="h-20 w-auto flex-shrink-0" />
+        <img src="/forwhite.png" alt="RestOn Analytics" className="h-20 w-auto flex-shrink-0" />
         <div>
-          <h2 className="text-xl font-bold text-brand-dark mb-1">Reston Analytics</h2>
+          <h2 className="text-xl font-bold text-brand-dark mb-1">RestOn Analytics</h2>
           <p className="text-brand-muted text-sm leading-relaxed">
             Система аналитики и контроля ресторанов. Обеспечивает полный цикл управления
             списаниями: от генерации отчётов и сверки с нормами до отправки актов в IIKO
@@ -107,7 +107,7 @@ export default function AboutPage() {
 
       {/* Footer */}
       <p className="text-center text-brand-muted/50 text-xs mt-8">
-        © 2026 Reston Analytics
+        © 2026 RestOn Analytics
       </p>
     </div>
   )

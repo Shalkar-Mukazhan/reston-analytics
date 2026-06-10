@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 from sqlalchemy.orm import Session
 from app.models.report import IikoSession
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 
 def _redis():
@@ -38,6 +39,12 @@ def get_session_key(db: Session, restaurant, force_refresh: bool = False) -> str
     return key
 
 
+@retry(
+    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(4),
+    reraise=True,
+)
 def _auth_iiko(base_url: str, login: str, password_hash: str) -> str:
     url = f"{base_url}/resto/api/auth"
     r = requests.get(
@@ -64,15 +71,25 @@ def _save_session(db: Session, restaurant_id: int, key: str) -> None:
 
 
 def _cache_ttl(date_from: str) -> int:
-    """5 минут для сегодняшних данных, 1 час для прошлых дат."""
+    """15 минут для сегодняшних данных, 1 час для прошлых дат."""
     try:
         from datetime import timezone, timedelta
         almaty = timezone(timedelta(hours=5))
         query_date = datetime.fromisoformat(date_from).date()
         today = datetime.now(almaty).date()
-        return 300 if query_date >= today else 3600
+        return 900 if query_date >= today else 3600
     except Exception:
         return 3600
+
+
+@retry(
+    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(4),
+    reraise=True,
+)
+def _olap_request(url: str, params: dict) -> requests.Response:
+    return requests.get(url, params=params, timeout=180)
 
 
 def fetch_olap(db: Session, restaurant, preset_id: str, date_from: str, date_to: str) -> list:
@@ -90,12 +107,12 @@ def fetch_olap(db: Session, restaurant, preset_id: str, date_from: str, date_to:
     url = f"{restaurant.base_url}/resto/api/v2/reports/olap/byPresetId/{preset_id}"
     params = {"key": key, "dateFrom": date_from, "dateTo": date_to}
 
-    r = requests.get(url, params=params, timeout=180)
+    r = _olap_request(url, params)
 
     if r.status_code in (401, 403):
         key = get_session_key(db, restaurant, force_refresh=True)
         params["key"] = key
-        r = requests.get(url, params=params, timeout=180)
+        r = _olap_request(url, params)
 
     r.raise_for_status()
     data = r.json().get("data", [])

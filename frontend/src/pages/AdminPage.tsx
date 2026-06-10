@@ -7,10 +7,17 @@ import {
   RefreshCw, Wifi, WifiOff, BookOpen, CreditCard,
   Layers, Tag, Database, Search, ChefHat, Trash, ArrowLeftRight, FileSpreadsheet,
   ShieldCheck, ToggleLeft, ToggleRight, FileInput, TrendingUp,
-  BarChart2, TableProperties, FileText,
-  History, RotateCcw,
+  BarChart2, TableProperties, FileText, ScanLine,
+  History, RotateCcw, Info,
 } from "lucide-react"
 import { cn } from "../lib/utils"
+
+const errMsg = (e: any): string => {
+  const detail = e?.response?.data?.detail
+  if (Array.isArray(detail)) return detail.map((d: any) => d.msg ?? JSON.stringify(d)).join(', ')
+  if (typeof detail === 'string') return detail
+  return e?.message ?? 'Неизвестная ошибка'
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -146,14 +153,14 @@ function UsersTab({ restaurants }: { restaurants: Restaurant[] }) {
       }
       await load(); setShowForm(false)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSaving(false) }
   }
 
   const remove = async (id: number, username: string) => {
     if (!confirm(`Удалить пользователя «${username}»?`)) return
     try { await api.delete(`/admin/users/${id}`); await load() }
-    catch (e: any) { setMsg({ type: "error", text: e.response?.data?.detail || e.message }) }
+    catch (e: any) { setMsg({ type: "error", text: errMsg(e) }) }
   }
 
   const toggleRestaurant = (rid: number) => {
@@ -302,6 +309,8 @@ function RestaurantsTab() {
   const [savingRates, setSavingRates] = useState(false)
   const [testingConn, setTestingConn] = useState<number | null>(null)
   const [connResult, setConnResult] = useState<{ id: number; ok: boolean; msg: string } | null>(null)
+  const [deptOptions, setDeptOptions] = useState<string[]>([])
+  const [loadingDepts, setLoadingDepts] = useState(false)
   // selectedPresetIds — список ID выбранных пресетов из глобального списка
   const [selectedPresetIds, setSelectedPresetIds] = useState<number[]>([])
   const [form, setForm] = useState<{
@@ -314,6 +323,7 @@ function RestaurantsTab() {
     checklist_start_hour: 7,
   })
   const [saving, setSaving] = useState(false)
+  const [startingDay, setStartingDay] = useState<number | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -328,13 +338,28 @@ function RestaurantsTab() {
 
   const openNew = () => {
     setEditId(null)
+    setDeptOptions([])
     setForm({ code: "", name: "", base_url: "", iiko_login: "", iiko_password: "", department_name: "", store_id: "", is_active: true, google_sheet_url: "", checklist_start_hour: 7 })
     setSelectedPresetIds([])
     setShowForm(true); setMsg(null)
   }
 
+  const fetchDepartments = async (restaurantId: number) => {
+    setLoadingDepts(true)
+    setDeptOptions([])
+    try {
+      const res = await api.get(`/admin/iiko/departments/${restaurantId}`)
+      setDeptOptions(res.data.departments ?? [])
+    } catch (e: any) {
+      alert(e?.response?.data?.detail ?? "Ошибка получения Department из IIKO")
+    } finally {
+      setLoadingDepts(false)
+    }
+  }
+
   const openEdit = (r: Restaurant) => {
     setEditId(r.id)
+    setDeptOptions([])
     setForm({
       code: r.code, name: r.name, base_url: r.base_url ?? "",
       iiko_login: r.iiko_login ?? "", iiko_password: "",
@@ -380,7 +405,7 @@ function RestaurantsTab() {
       }
       await load(); setShowForm(false)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSaving(false) }
   }
 
@@ -393,7 +418,20 @@ function RestaurantsTab() {
   const remove = async (id: number, name: string) => {
     if (!confirm(`Удалить ресторан «${name}»?`)) return
     try { await api.delete(`/admin/restaurants/${id}`); await load() }
-    catch (e: any) { setMsg({ type: "error", text: e.response?.data?.detail || e.message }) }
+    catch (e: any) { setMsg({ type: "error", text: errMsg(e) }) }
+  }
+
+  const startDayForRestaurant = async (id: number, name: string) => {
+    setStartingDay(id)
+    setMsg(null)
+    try {
+      const res = await api.post(`/checklist/start-day/${id}`)
+      setMsg({ type: "success", text: `${name}: ${res.data.message}` })
+    } catch (e: any) {
+      setMsg({ type: "error", text: errMsg(e) })
+    } finally {
+      setStartingDay(null)
+    }
   }
 
   const toggleRates = async (id: number) => {
@@ -410,7 +448,7 @@ function RestaurantsTab() {
       await api.put(`/admin/restaurants/${id}/waste-rates`, payload)
       setMsg({ type: "success", text: "Нормы сохранены" })
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSavingRates(false) }
   }
 
@@ -420,7 +458,7 @@ function RestaurantsTab() {
       const { data } = await api.post(`/admin/iiko/test-connection/${id}`)
       setConnResult({ id, ok: data.ok, msg: data.ok ? "Подключение успешно" : data.error })
     } catch (e: any) {
-      setConnResult({ id, ok: false, msg: e.response?.data?.detail || e.message })
+      setConnResult({ id, ok: false, msg: errMsg(e) })
     } finally { setTestingConn(null) }
   }
 
@@ -466,8 +504,35 @@ function RestaurantsTab() {
               <input className="input w-full" type="password" value={form.iiko_password} onChange={(e) => setForm((f) => ({ ...f, iiko_password: e.target.value }))} />
             </div>
             <div>
-              <label className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-1.5 block">Department name (IIKO)</label>
-              <input className="input w-full" value={form.department_name} onChange={(e) => setForm((f) => ({ ...f, department_name: e.target.value }))} />
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-brand-muted uppercase tracking-wide">Department name (IIKO)</label>
+                {editId && (
+                  <button
+                    type="button"
+                    onClick={() => fetchDepartments(editId)}
+                    disabled={loadingDepts}
+                    className="text-xs text-brand-yellow hover:underline disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {loadingDepts ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    Узнать из IIKO
+                  </button>
+                )}
+              </div>
+              {deptOptions.length > 0 ? (
+                <select
+                  className="input w-full"
+                  value={form.department_name}
+                  onChange={(e) => setForm((f) => ({ ...f, department_name: e.target.value }))}
+                >
+                  <option value="">— выберите Department —</option>
+                  {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              ) : (
+                <input className="input w-full" value={form.department_name} onChange={(e) => setForm((f) => ({ ...f, department_name: e.target.value }))} />
+              )}
+              {deptOptions.length > 0 && (
+                <p className="text-xs text-brand-muted mt-1">Выберите из IIKO или введите вручную</p>
+              )}
             </div>
             <div>
               <label className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-1.5 block">Store ID (IIKO)</label>
@@ -583,6 +648,21 @@ function RestaurantsTab() {
                   </span>
                 </div>
                 <div className="flex gap-2">
+                  {(r as any).google_sheet_url && (
+                    <button
+                      className="btn-primary py-1 px-2.5 text-xs"
+                      onClick={() => startDayForRestaurant(r.id, r.name)}
+                      disabled={startingDay === r.id}
+                      title="Начать новый день (загрузить план и предыдущий день в Google Sheets)"
+                    >
+                      {startingDay === r.id ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <RefreshCw size={12} />
+                      )}
+                      {startingDay === r.id ? "Запуск..." : "Новый день"}
+                    </button>
+                  )}
                   <button
                     className={cn("btn-secondary py-1 px-2.5 text-xs", expandedRates === r.id && "bg-brand-yellow/10 border-brand-yellow/30")}
                     onClick={() => toggleRates(r.id)}
@@ -634,13 +714,25 @@ function IikoSyncTab() {
   const [loading, setLoading] = useState(true)
   const [syncingStores, setSyncingStores] = useState(false)
   const [syncingSupplier, setSyncingSupplier] = useState<number | null>(null)
+  const [syncingPricelist, setSyncingPricelist] = useState<number | null>(null)
   const [storesResult, setStoresResult] = useState<{ matched: number; found: number } | null>(null)
   const [supplierResults, setSupplierResults] = useState<Record<number, { added: number; updated: number } | string>>({})
+  const [pricelistResults, setPricelistResults] = useState<Record<number, { added: number; updated: number; errors: string[] } | string>>({})
+  const [suppliers, setSuppliers] = useState<{ id: number; name: string; iiko_code: string | null; taxpayer_id: string | null }[]>([])
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false)
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
   useEffect(() => {
     api.get("/admin/restaurants").then((r) => { setRestaurants(r.data); setLoading(false) })
   }, [])
+
+  const loadSuppliers = async () => {
+    setLoadingSuppliers(true)
+    try {
+      const { data } = await api.get("/admin/suppliers")
+      setSuppliers(data)
+    } finally { setLoadingSuppliers(false) }
+  }
 
   const syncStores = async () => {
     setSyncingStores(true); setStoresResult(null); setMsg(null)
@@ -650,7 +742,7 @@ function IikoSyncTab() {
       setMsg({ type: "success", text: `Склады синхронизированы: найдено ${data.stores_found}, привязано ${data.restaurants_matched} ресторанов` })
       const r = await api.get("/admin/restaurants"); setRestaurants(r.data)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSyncingStores(false) }
   }
 
@@ -659,9 +751,20 @@ function IikoSyncTab() {
     try {
       const { data } = await api.post(`/admin/iiko/sync-suppliers/${id}`)
       setSupplierResults((prev) => ({ ...prev, [id]: { added: data.added, updated: data.updated } }))
+      loadSuppliers()
     } catch (e: any) {
-      setSupplierResults((prev) => ({ ...prev, [id]: e.response?.data?.detail || e.message }))
+      setSupplierResults((prev) => ({ ...prev, [id]: errMsg(e) }))
     } finally { setSyncingSupplier(null) }
+  }
+
+  const syncPricelist = async (id: number) => {
+    setSyncingPricelist(id)
+    try {
+      const { data } = await api.post(`/admin/iiko/sync-pricelist/${id}`)
+      setPricelistResults((prev) => ({ ...prev, [id]: { added: data.added, updated: data.updated, errors: data.errors || [] } }))
+    } catch (e: any) {
+      setPricelistResults((prev) => ({ ...prev, [id]: errMsg(e) }))
+    } finally { setSyncingPricelist(null) }
   }
 
   return (
@@ -692,13 +795,63 @@ function IikoSyncTab() {
         </div>
       </div>
 
+      {/* Список поставщиков */}
+      <div className="card">
+        <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-brand-dark flex items-center gap-2">
+              <Users size={15} className="text-brand-yellow" /> Поставщики
+            </h3>
+            <p className="text-sm text-brand-muted mt-0.5">Список поставщиков синхронизированных из iiko с их БИН/ИИН</p>
+          </div>
+          <button className="btn-secondary text-xs py-1.5 px-3 flex-shrink-0" onClick={loadSuppliers} disabled={loadingSuppliers}>
+            {loadingSuppliers ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            Загрузить
+          </button>
+        </div>
+        {suppliers.length === 0 && !loadingSuppliers ? (
+          <p className="text-sm text-brand-muted px-5 py-4">Нажмите «Загрузить» или выполните синхронизацию поставщиков ниже</p>
+        ) : loadingSuppliers ? (
+          <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin text-brand-muted" /></div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-brand-border">
+                  {["Название", "Код iiko", "БИН/ИИН", "UUID"].map(h => (
+                    <th key={h} className="text-left py-2 px-5 text-brand-muted font-medium text-xs uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {suppliers.map(s => (
+                  <tr key={s.id} className="border-b border-brand-border/50 hover:bg-brand-bg/60">
+                    <td className="py-2.5 px-5 font-medium text-brand-dark">{s.name}</td>
+                    <td className="py-2.5 px-5 font-mono text-xs text-brand-muted">{s.iiko_code || "—"}</td>
+                    <td className="py-2.5 px-5 font-mono text-xs">
+                      {s.taxpayer_id
+                        ? <span className="text-green-700 font-medium">{s.taxpayer_id}</span>
+                        : <span className="text-brand-muted">—</span>
+                      }
+                    </td>
+                    <td className="py-2.5 px-5 font-mono text-xs text-brand-muted truncate max-w-[180px]">{s.id}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Sync Suppliers per restaurant */}
       <div className="card">
-        <div className="px-5 py-4 border-b border-brand-border">
-          <h3 className="font-semibold text-brand-dark flex items-center gap-2">
-            <Users size={15} className="text-brand-yellow" /> Синхронизация поставщиков
-          </h3>
-          <p className="text-sm text-brand-muted mt-0.5">Загружает список поставщиков из IIKO для каждого ресторана</p>
+        <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-brand-dark flex items-center gap-2">
+              <Users size={15} className="text-brand-yellow" /> Синхронизация поставщиков
+            </h3>
+            <p className="text-sm text-brand-muted mt-0.5">Загружает список поставщиков из IIKO — имя, код, БИН/ИИН</p>
+          </div>
         </div>
         {loading ? (
           <div className="flex justify-center py-10"><Loader2 size={22} className="animate-spin text-brand-muted" /></div>
@@ -740,6 +893,54 @@ function IikoSyncTab() {
           </div>
         )}
       </div>
+      {/* Sync Pricelist per restaurant */}
+      <div className="card">
+        <div className="px-5 py-4 border-b border-brand-border">
+          <h3 className="font-semibold text-brand-dark flex items-center gap-2">
+            <Database size={15} className="text-brand-yellow" /> Синхронизация прайс-листов
+          </h3>
+          <p className="text-sm text-brand-muted mt-0.5">
+            Загружает маппинг «код товара поставщика → товар iiko». Нужно для авто-сопоставления OCR-накладных.
+          </p>
+        </div>
+        {loading ? (
+          <div className="flex justify-center py-10"><Loader2 size={22} className="animate-spin text-brand-muted" /></div>
+        ) : (
+          <div className="divide-y divide-brand-border">
+            {restaurants.filter((r) => r.is_active).map((r) => {
+              const result = pricelistResults[r.id]
+              return (
+                <div key={r.id} className="flex items-center gap-4 px-5 py-3">
+                  <div className="w-10 h-8 rounded-lg bg-brand-yellow/10 flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs font-bold text-brand-dark">{r.code}</span>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-brand-dark">{r.name}</p>
+                    {result && typeof result === "object" && (
+                      <p className="text-xs text-green-600 mt-0.5">
+                        Добавлено: {result.added}, обновлено: {result.updated}
+                        {result.errors.length > 0 && <span className="text-yellow-600 ml-2">Ошибки: {result.errors.length}</span>}
+                      </p>
+                    )}
+                    {result && typeof result === "string" && (
+                      <p className="text-xs text-brand-red mt-0.5">{result}</p>
+                    )}
+                  </div>
+                  <button
+                    className="btn-secondary text-xs py-1 px-2.5"
+                    disabled={!r.base_url || syncingPricelist === r.id}
+                    onClick={() => syncPricelist(r.id)}
+                  >
+                    {syncingPricelist === r.id ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    Загрузить
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
     </div>
   )
 }
@@ -786,14 +987,14 @@ function GroupsTab() {
       }
       await load(); setShowForm(false)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSaving(false) }
   }
 
   const remove = async (id: number, name: string) => {
     if (!confirm(`Удалить группу «${name}»? Товары в ней станут без группы.`)) return
     try { await api.delete(`/admin/product-groups/${id}`); await load() }
-    catch (e: any) { setMsg({ type: "error", text: e.response?.data?.detail || e.message }) }
+    catch (e: any) { setMsg({ type: "error", text: errMsg(e) }) }
   }
 
   const accountName = (id: number | null) => accounts.find((a) => a.id === id)?.name ?? "—"
@@ -912,7 +1113,7 @@ function AccountsTab() {
       setMsg({ type: "success", text: `Синхронизировано из IIKO: добавлено ${data.added}, обновлено ${data.updated}, всего ${data.total}` })
       await load()
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSyncing(false) }
   }
 
@@ -931,14 +1132,14 @@ function AccountsTab() {
       }
       await load(); setShowForm(false)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSaving(false) }
   }
 
   const remove = async (id: number, name: string) => {
     if (!confirm(`Удалить счёт «${name}»? Все связанные группы будут отвязаны.`)) return
     try { await api.delete(`/admin/accounts/${id}`); await load() }
-    catch (e: any) { setMsg({ type: "error", text: e.response?.data?.detail || e.message }) }
+    catch (e: any) { setMsg({ type: "error", text: errMsg(e) }) }
   }
 
   const assignAccount = async (groupId: number, accountId: number | null) => {
@@ -947,7 +1148,7 @@ function AccountsTab() {
       await api.patch(`/admin/product-groups/${groupId}`, { account_id: accountId })
       setGroups((prev) => prev.map((g) => g.id === groupId ? { ...g, account_id: accountId } : g))
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSavingGroup(null) }
   }
 
@@ -1116,7 +1317,7 @@ function CatalogTab() {
       setMsg({ type: "success", text: `Синхронизировано: добавлено ${d.added}, обновлено ${d.updated}, без группы ${d.unmapped} из ${d.total}` })
       await load()
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSyncing(false) }
   }
 
@@ -1133,7 +1334,7 @@ function CatalogTab() {
       } : prev)
       setEditingGroup(null)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSavingGroup(null) }
   }
 
@@ -1161,7 +1362,7 @@ function CatalogTab() {
 
       {/* Stats */}
       {data && (
-        <div className="grid grid-cols-4 gap-4 mb-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-5">
           {[
             { label: "Всего товаров", value: data.stats.total_all, color: "text-brand-dark" },
             { label: "Активные", value: data.stats.total_all - data.stats.deleted, color: "text-green-600" },
@@ -1317,14 +1518,14 @@ function PresetsTab() {
       }
       await load(); setShowForm(false)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSaving(false) }
   }
 
   const remove = async (id: number, type: string) => {
     if (!confirm(`Удалить пресет «${PRESET_LABELS[type] ?? type}»? Он будет отвязан от всех ресторанов.`)) return
     try { await api.delete(`/admin/presets/${id}`); await load() }
-    catch (e: any) { setMsg({ type: "error", text: e.response?.data?.detail || e.message }) }
+    catch (e: any) { setMsg({ type: "error", text: errMsg(e) }) }
   }
 
   const grouped = PRESET_TYPES.map((type) => ({
@@ -1451,15 +1652,13 @@ function AblMappingTab() {
     try {
       const form = new FormData()
       form.append("file", file)
-      const { data } = await api.post("/admin/upload-mapping-abl", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      })
+      const { data } = await api.post("/admin/upload-mapping-abl", form)
       setMsg({ type: "success", text: `Загружено: ${data.created ?? data.added ?? 0} создано, ${data.updated} обновлено. Привязано к IIKO: ${data.linked_to_iiko} из ${data.total_in_db}` })
       setFile(null)
       if (fileRef.current) fileRef.current.value = ""
       const s = await api.get("/admin/abl-stats"); setStats(s.data)
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setUploading(false) }
   }
 
@@ -1467,7 +1666,7 @@ function AblMappingTab() {
     <div>
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-3 gap-4 mb-5">
+        <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-5">
           {[
             { label: "Всего артикулов ABL", value: stats.total, color: "text-brand-dark" },
             { label: "Привязано к IIKO", value: stats.linked, color: "text-green-600" },
@@ -1624,7 +1823,7 @@ function RecipesTab() {
       // Обновляем лог — помечаем запись как откаченную
       setChangelog(prev => prev ? prev.map(e => e.id === rollbackModal.id ? { ...e, is_rolled_back: true } : e) : prev)
     } catch (e: any) {
-      setRollbackResult({ error: e.response?.data?.detail || e.message })
+      setRollbackResult({ error: errMsg(e) })
     } finally { setRollbackLoading(false) }
   }
 
@@ -1643,7 +1842,7 @@ function RecipesTab() {
       await loadStats()
       setResults(null); setSelected(new Set())
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSyncing(false) }
   }
 
@@ -1661,7 +1860,7 @@ function RecipesTab() {
       setImportResult(data)
       await loadStats()
     } catch (e: any) {
-      setImportResult({ error: e.response?.data?.detail || e.message })
+      setImportResult({ error: errMsg(e) })
     } finally { setImporting(false) }
   }
 
@@ -1674,7 +1873,7 @@ function RecipesTab() {
       setResults(data)
       if (data.length === 0) setMsg({ type: "error", text: `Ингредиент «${search}» не найден ни в одной техкарте` })
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setSearching(false) }
   }
 
@@ -1722,7 +1921,7 @@ function RecipesTab() {
       setResults((prev) => prev ? prev.filter((r) => !selected.has(r.chart_id)) : prev)
       setSelected(new Set())
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setRemoving(false) }
   }
 
@@ -1770,7 +1969,7 @@ function RecipesTab() {
       setSelected(new Set())
       setShowReplaceForm(false); setSelectedNewIng(null); setNewIngSearch(""); setNewIngResults([])
     } catch (e: any) {
-      setMsg({ type: "error", text: e.response?.data?.detail || e.message })
+      setMsg({ type: "error", text: errMsg(e) })
     } finally { setReplacing(false) }
   }
 
@@ -1869,7 +2068,7 @@ function RecipesTab() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-3 gap-4 mb-5">
+        <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-5">
           {[
             { label: "Блюд / заготовок", value: stats.dishes },
             { label: "Техкарт", value: stats.charts },
@@ -2240,17 +2439,19 @@ function RecipesTab() {
 
 // ── Tab: Access (feature flags per restaurant) ────────────────────────────────
 
-type FeatKey = "feat_invoices" | "feat_analytics" | "feat_reports" | "feat_planning" | "feat_checklist"
+type FeatKey = "feat_invoices" | "feat_invoices2" | "feat_analytics" | "feat_reports" | "feat_planning" | "feat_checklist" | "feat_about"
 
 interface AccessRestaurant {
   id: number
   name: string
   code: string
   feat_invoices:  boolean
+  feat_invoices2: boolean
   feat_analytics: boolean
   feat_reports:   boolean
   feat_planning:  boolean
   feat_checklist: boolean
+  feat_about:     boolean
 }
 
 function AccessTab() {
@@ -2263,10 +2464,12 @@ function AccessTab() {
       .then(r => setRestaurants(r.data.map((x: any) => ({
         id: x.id, name: x.name, code: x.code,
         feat_invoices:  x.feat_invoices  !== false,
+        feat_invoices2: x.feat_invoices2 !== false,
         feat_analytics: x.feat_analytics !== false,
         feat_reports:   x.feat_reports   !== false,
         feat_planning:  x.feat_planning  !== false,
         feat_checklist: x.feat_checklist !== false,
+        feat_about:     x.feat_about     !== false,
       }))))
       .finally(() => setLoading(false))
   }, [])
@@ -2289,15 +2492,19 @@ function AccessTab() {
   const FEATURES: { key: FeatKey; label: string; icon: React.ReactNode; desc: string }[] = [
     { key: "feat_reports",   label: "Отчёты",       icon: <FileText size={15} />,       desc: "Генерация и просмотр отчётов" },
     { key: "feat_invoices",  label: "Накладные",    icon: <FileInput size={15} />,      desc: "Приём накладных ABL" },
+    { key: "feat_invoices2", label: "Накладные 2",  icon: <ScanLine  size={15} />,      desc: "OCR накладных через фото/PDF" },
     { key: "feat_analytics", label: "Аналитика",    icon: <TrendingUp size={15} />,     desc: "Аналитика и тренды" },
     { key: "feat_planning",  label: "Планирование", icon: <BarChart2 size={15} />,      desc: "Планирование продаж" },
     { key: "feat_checklist", label: "Чек-лист",     icon: <TableProperties size={15} />, desc: "Чек-лист менеджера смены" },
+    { key: "feat_about",     label: "О системе",    icon: <Info size={15} />,            desc: "Страница о системе" },
   ]
 
   if (loading) return <div className="flex justify-center py-20"><Loader2 size={22} className="animate-spin text-brand-muted" /></div>
 
   return (
     <div className="space-y-6">
+
+      {/* Доступ по ресторанам */}
       <div className="card p-5">
         <div className="flex items-center gap-3 mb-1">
           <ShieldCheck size={18} className="text-brand-yellow" />
@@ -2384,10 +2591,11 @@ export default function AdminPage() {
     { id: "iiko",        label: "IIKO Sync",        icon: <RefreshCw size={15} /> },
     { id: "abl",         label: "ABL Маппинг",      icon: <Upload size={15} /> },
     { id: "recipes",     label: "Тех. карты",        icon: <ChefHat size={15} /> },
+    { id: "access", label: "Доступ",            icon: <ShieldCheck size={15} /> },
   ]
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-brand-dark flex items-center gap-2">
           <Settings size={22} className="text-brand-yellow" /> Администрирование
@@ -2395,16 +2603,21 @@ export default function AdminPage() {
         <p className="text-brand-muted text-sm mt-1">Управление пользователями, ресторанами и справочниками</p>
       </div>
 
-      <div className="flex gap-1 mb-6 bg-white border border-brand-border rounded-xl p-1 w-fit flex-wrap">
-        {tabs.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
-              tab === t.id ? "bg-brand-yellow text-brand-dark shadow-sm" : "text-brand-muted hover:text-brand-dark"
-            )}>
-            {t.icon} {t.label}
-          </button>
-        ))}
+      <div className="mb-6 -mx-4 sm:mx-0">
+        <div className="flex gap-1 overflow-x-auto px-4 sm:px-0 pb-1 sm:flex-wrap sm:bg-white sm:border sm:border-brand-border sm:rounded-xl sm:p-1 sm:w-fit no-scrollbar">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap flex-shrink-0",
+                "border sm:border-0",
+                tab === t.id
+                  ? "bg-brand-yellow text-brand-dark shadow-sm border-brand-yellow"
+                  : "text-brand-muted hover:text-brand-dark bg-white border-brand-border sm:bg-transparent sm:border-transparent"
+              )}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div>
@@ -2417,6 +2630,7 @@ export default function AdminPage() {
         {tab === "iiko"        && <IikoSyncTab />}
         {tab === "abl"         && <AblMappingTab />}
         {tab === "recipes"     && <RecipesTab />}
+        {tab === "access"      && <AccessTab />}
       </div>
     </div>
   )
