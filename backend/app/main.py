@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.api import auth, reports, writeoff, analytics, admin, invoices, dashboard, recipes, planning, checklist, invoices2
 from app.api import co_auth, co_admin, co_invoices, co_writeoffs
 
 # Sentry — мониторинг ошибок (включается если задан SENTRY_DSN)
@@ -43,17 +42,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(reports.router)
-app.include_router(writeoff.router)
-app.include_router(analytics.router)
-app.include_router(admin.router)
-app.include_router(invoices.router)
-app.include_router(dashboard.router)
-app.include_router(recipes.router)
-app.include_router(planning.router)
-app.include_router(checklist.router)
-app.include_router(invoices2.router)
 app.include_router(co_auth.router)
 app.include_router(co_admin.router)
 app.include_router(co_invoices.router)
