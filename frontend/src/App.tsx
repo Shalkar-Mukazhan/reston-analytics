@@ -9,9 +9,9 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<CoLoginPage />} />
-        <Route path="/co/admin" element={<CoAdminPage />} />
-        <Route path="/co/invoices" element={<CoInvoicesPage />} />
-        <Route path="/co/writeoffs" element={<CoWriteoffPage />} />
+        <Route path="/admin" element={<CoAdminPage />} />
+        <Route path="/invoices" element={<CoInvoicesPage />} />
+        <Route path="/writeoffs" element={<CoWriteoffPage />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>

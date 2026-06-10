@@ -76,7 +76,7 @@ export default function CoAdminPage() {
     coApi.get('/auth/me').then(r => {
       setMe(r.data)
       if (!searchParams.get('tab')) {
-        navigate(`/co/admin?tab=${r.data.role === 'admin' ? 'restaurants' : 'mapping'}`, { replace: true })
+        navigate(`/admin?tab=${r.data.role === 'admin' ? 'restaurants' : 'mapping'}`, { replace: true })
       }
     }).catch(() => navigate('/login'))
   }, [])

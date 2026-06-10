@@ -23,7 +23,7 @@ export default function CoLoginPage() {
       })
       localStorage.setItem('co_access_token', data.access_token)
       localStorage.setItem('co_refresh_token', data.refresh_token)
-      navigate(data.role === 'admin' ? '/co/admin' : '/co/invoices')
+      navigate(data.role === 'admin' ? '/admin' : '/invoices')
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? 'Ошибка входа')
     } finally {
