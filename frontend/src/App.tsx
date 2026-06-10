@@ -8,11 +8,11 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/co/login" element={<CoLoginPage />} />
+        <Route path="/login" element={<CoLoginPage />} />
         <Route path="/co/admin" element={<CoAdminPage />} />
         <Route path="/co/invoices" element={<CoInvoicesPage />} />
         <Route path="/co/writeoffs" element={<CoWriteoffPage />} />
-        <Route path="*" element={<Navigate to="/co/login" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   )

@@ -60,13 +60,13 @@ export default function CoWriteoffPage() {
   const [tab, setTab] = useState<'act' | 'settings'>('act')
 
   useEffect(() => {
-    coApi.get('/auth/me').then(r => setMe(r.data)).catch(() => navigate('/co/login'))
+    coApi.get('/auth/me').then(r => setMe(r.data)).catch(() => navigate('/login'))
   }, [navigate])
 
   const handleLogout = () => {
     localStorage.removeItem('co_access_token')
     localStorage.removeItem('co_refresh_token')
-    navigate('/co/login')
+    navigate('/login')
   }
 
   return (

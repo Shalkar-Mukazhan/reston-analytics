@@ -26,10 +26,10 @@ coApi.interceptors.response.use(
         } catch {
           localStorage.removeItem('co_access_token')
           localStorage.removeItem('co_refresh_token')
-          window.location.href = '/co/login'
+          window.location.href = '/login'
         }
       } else {
-        window.location.href = '/co/login'
+        window.location.href = '/login'
       }
     }
     return Promise.reject(error)

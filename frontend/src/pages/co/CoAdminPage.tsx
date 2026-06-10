@@ -78,7 +78,7 @@ export default function CoAdminPage() {
       if (!searchParams.get('tab')) {
         navigate(`/co/admin?tab=${r.data.role === 'admin' ? 'restaurants' : 'mapping'}`, { replace: true })
       }
-    }).catch(() => navigate('/co/login'))
+    }).catch(() => navigate('/login'))
   }, [])
 
   const logout = () => {
