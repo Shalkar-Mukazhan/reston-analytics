@@ -38,6 +38,12 @@ def get_current_co_user(token: str = Depends(_oauth2), db: Session = Depends(get
     user = db.query(CoUser).filter(CoUser.id == user_id, CoUser.is_active == True).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
+    tok_tid = payload.get("tenant_id")
+    if tok_tid is not None and user.tenant_id != tok_tid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Токен не соответствует тенанту пользователя",
+        )
     return user
 
 
@@ -48,7 +54,7 @@ def require_co_admin(user: CoUser = Depends(get_current_co_user)) -> CoUser:
 
 
 def _make_tokens(user: CoUser) -> TokenResponse:
-    payload = {"sub": str(user.id), "tenant": "co"}
+    payload = {"sub": str(user.id), "tenant": "co", "tenant_id": user.tenant_id}
     return TokenResponse(
         access_token=create_access_token(payload),
         refresh_token=create_refresh_token(payload),
@@ -87,6 +93,7 @@ def me(user: CoUser = Depends(get_current_co_user)):
         "email": user.email,
         "name": user.name,
         "role": user.role,
+        "tenant_id": user.tenant_id,
         "restaurant_ids": [r.id for r in user.restaurants],
     }
 

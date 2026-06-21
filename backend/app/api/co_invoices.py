@@ -11,11 +11,12 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_utils import load_restaurant
 from app.api.co_auth import get_current_co_user, CoUser
 from app.models.co_models import (
     CoRestaurant, CoWarehouse, CoSupplier,
@@ -41,11 +42,15 @@ def _detect_media_type(filename: str) -> str:
     return mt
 
 
-def _check_access(user: CoUser, restaurant_id: int) -> None:
+def _check_access(user: CoUser, restaurant_id: int, db) -> None:
+    load_restaurant(db, restaurant_id, user)
     if user.role == "admin":
         return
     if restaurant_id not in [r.id for r in user.restaurants]:
-        raise HTTPException(status_code=403, detail="Нет доступа к этому ресторану")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Нет доступа к этому ресторану",
+        )
 
 
 # ── OCR parse ─────────────────────────────────────────────────────────────────
@@ -58,9 +63,7 @@ async def ocr_parse(
     user: CoUser = Depends(get_current_co_user),
 ):
     """Распознаёт накладную через Claude Vision. Ничего не сохраняет."""
-    if not db.query(CoRestaurant).filter(CoRestaurant.id == restaurant_id).first():
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
-    _check_access(user, restaurant_id)
+    _check_access(user, restaurant_id, db)
 
     if not files:
         raise HTTPException(status_code=400, detail="Нет файлов")
@@ -114,9 +117,7 @@ def ocr_confirm(
     db: Session = Depends(get_db),
     user: CoUser = Depends(get_current_co_user),
 ):
-    if not db.query(CoRestaurant).filter(CoRestaurant.id == body.restaurant_id).first():
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
-    _check_access(user, body.restaurant_id)
+    _check_access(user, body.restaurant_id, db)
     if not db.query(CoWarehouse).filter(CoWarehouse.id == body.warehouse_id).first():
         raise HTTPException(status_code=404, detail="Склад не найден")
 
@@ -134,10 +135,14 @@ def ocr_confirm(
     supplier = None
     if body.supplier_bin:
         normalized_bin = re.sub(r"\s+", "", body.supplier_bin.strip())
-        supplier = db.query(CoSupplier).filter(CoSupplier.bin == normalized_bin).first()
+        supplier = db.query(CoSupplier).filter(
+            CoSupplier.bin == normalized_bin,
+            CoSupplier.tenant_id == user.tenant_id,
+        ).first()
     if not supplier and body.supplier_name:
         supplier = db.query(CoSupplier).filter(
-            CoSupplier.name.ilike(f"%{body.supplier_name[:30]}%")
+            CoSupplier.name.ilike(f"%{body.supplier_name[:30]}%"),
+            CoSupplier.tenant_id == user.tenant_id,
         ).first()
 
     # Авто-маппинг по коду поставщика → iiko товар
@@ -165,7 +170,10 @@ def ocr_confirm(
     db.flush()
 
     # Все активные товары для нечёткого поиска
-    all_active = db.query(CoProduct).filter(CoProduct.is_active == True).all()
+    all_active = db.query(CoProduct).filter(
+        CoProduct.is_active == True,
+        CoProduct.tenant_id == user.tenant_id,
+    ).all()
 
     def _fuzzy(name: str):
         words = [w for w in name.lower().split() if len(w) > 3]
@@ -219,7 +227,9 @@ def list_invoices(
     user: CoUser = Depends(get_current_co_user),
 ):
     accessible = [r.id for r in user.restaurants] if user.role != "admin" else None
-    q = db.query(CoInvoice)
+    q = db.query(CoInvoice).join(
+        CoRestaurant, CoInvoice.restaurant_id == CoRestaurant.id
+    ).filter(CoRestaurant.tenant_id == user.tenant_id)
     if accessible is not None:
         q = q.filter(CoInvoice.restaurant_id.in_(accessible))
     if restaurant_id:
@@ -229,7 +239,7 @@ def list_invoices(
 
     supplier_ids = [i.supplier_id for i in invoices if i.supplier_id]
     warehouse_ids = [i.warehouse_id for i in invoices]
-    suppliers = {s.id: s for s in db.query(CoSupplier).filter(CoSupplier.id.in_(supplier_ids)).all()}
+    suppliers = {s.id: s for s in db.query(CoSupplier).filter(CoSupplier.id.in_(supplier_ids), CoSupplier.tenant_id == user.tenant_id).all()}
     warehouses = {w.id: w for w in db.query(CoWarehouse).filter(CoWarehouse.id.in_(warehouse_ids)).all()}
 
     result = []
@@ -267,10 +277,10 @@ def get_items(
     inv = db.query(CoInvoice).filter(CoInvoice.id == inv_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Накладная не найдена")
-    _check_access(user, inv.restaurant_id)
+    _check_access(user, inv.restaurant_id, db)
 
     product_ids = [i.product_id for i in inv.items if i.product_id]
-    products = {p.id: p for p in db.query(CoProduct).filter(CoProduct.id.in_(product_ids)).all()}
+    products = {p.id: p for p in db.query(CoProduct).filter(CoProduct.id.in_(product_ids), CoProduct.tenant_id == user.tenant_id).all()}
 
     # Загружаем маппинги поставщика → контейнеры
     mappings_by_name: dict[str, CoProductMapping] = {}
@@ -296,7 +306,7 @@ def get_items(
         product = products.get(effective_product_id) if effective_product_id else None
         # Если нашли через маппинг, но не было в preloaded products — дозагружаем
         if effective_product_id and not product:
-            product = db.query(CoProduct).filter(CoProduct.id == effective_product_id).first()
+            product = db.query(CoProduct).filter(CoProduct.id == effective_product_id, CoProduct.tenant_id == user.tenant_id).first()
 
         qty = float(i.qty)
         iiko_qty = qty * float(container.count) if container else None
@@ -335,7 +345,7 @@ def update_invoice(
     inv = db.query(CoInvoice).filter(CoInvoice.id == inv_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Накладная не найдена")
-    _check_access(user, inv.restaurant_id)
+    _check_access(user, inv.restaurant_id, db)
 
     result: dict = {"ok": True}
 
@@ -348,7 +358,10 @@ def update_invoice(
         result["warehouse_name"] = wh.name
 
     if body.supplier_id is not None:
-        sup = db.query(CoSupplier).filter(CoSupplier.id == body.supplier_id).first()
+        sup = db.query(CoSupplier).filter(
+            CoSupplier.id == body.supplier_id,
+            CoSupplier.tenant_id == user.tenant_id,
+        ).first()
         if not sup:
             raise HTTPException(status_code=404, detail="Поставщик не найден")
         inv.supplier_id = body.supplier_id
@@ -373,7 +386,7 @@ def delete_invoice(
     inv = db.query(CoInvoice).filter(CoInvoice.id == inv_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Накладная не найдена")
-    _check_access(user, inv.restaurant_id)
+    _check_access(user, inv.restaurant_id, db)
     db.delete(inv)
     db.commit()
     return {"ok": True}
@@ -398,23 +411,27 @@ def post_to_iiko(
     inv = db.query(CoInvoice).filter(CoInvoice.id == inv_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Накладная не найдена")
-    _check_access(user, inv.restaurant_id)
+    _check_access(user, inv.restaurant_id, db)
     # Повторная отправка разрешена (например, после добавления маппингов для пропущенных позиций)
 
-    restaurant = db.query(CoRestaurant).filter(CoRestaurant.id == inv.restaurant_id).first()
+    restaurant = db.query(CoRestaurant).filter(CoRestaurant.id == inv.restaurant_id, CoRestaurant.tenant_id == user.tenant_id).first()
     warehouse = db.query(CoWarehouse).filter(CoWarehouse.id == inv.warehouse_id).first()
     if not warehouse or not warehouse.iiko_store_id:
         raise HTTPException(status_code=400, detail="Склад не привязан к iiko — укажите iiko_store_id в настройках склада")
 
-    supplier = db.query(CoSupplier).filter(CoSupplier.id == inv.supplier_id).first()
+    supplier = db.query(CoSupplier).filter(CoSupplier.id == inv.supplier_id, CoSupplier.tenant_id == user.tenant_id).first()
     if not supplier or not supplier.iiko_id:
         raise HTTPException(status_code=400, detail="У поставщика нет iiko UUID — выполните синхронизацию поставщиков")
 
     product_ids = [i.product_id for i in inv.items if i.product_id]
-    products = {p.id: p for p in db.query(CoProduct).filter(CoProduct.id.in_(product_ids)).all()}
+    products = {p.id: p for p in db.query(CoProduct).filter(CoProduct.id.in_(product_ids), CoProduct.tenant_id == user.tenant_id).all()}
 
     # Все продукты для нечёткого поиска по имени (фолбэк если нет маппинга)
-    all_products = db.query(CoProduct).filter(CoProduct.is_active == True, CoProduct.iiko_article_id.isnot(None)).all()
+    all_products = db.query(CoProduct).filter(
+        CoProduct.is_active == True,
+        CoProduct.iiko_article_id.isnot(None),
+        CoProduct.tenant_id == user.tenant_id,
+    ).all()
 
     def _fuzzy_find(name: str):
         words = [w for w in name.lower().split() if len(w) > 3]
@@ -456,7 +473,7 @@ def post_to_iiko(
 
         # Фолбэк 1: товар из маппинга (именно здесь зелёные позиции в UI)
         if (not p or not p.iiko_article_id) and mapping and mapping.product_id:
-            p = db.query(CoProduct).filter(CoProduct.id == mapping.product_id).first()
+            p = db.query(CoProduct).filter(CoProduct.id == mapping.product_id, CoProduct.tenant_id == user.tenant_id).first()
         # Фолбэк 2: нечёткий поиск по названию
         if (not p or not p.iiko_article_id) and item.supplier_product_name:
             p = _fuzzy_find(item.supplier_product_name)

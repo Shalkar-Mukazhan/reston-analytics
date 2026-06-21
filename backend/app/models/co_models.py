@@ -2,6 +2,7 @@
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, DateTime,
     Numeric, ForeignKey, Table, text, JSON,
+    UniqueConstraint, PrimaryKeyConstraint,
 )
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -9,12 +10,29 @@ from app.core.database import Base
 _S = "coffee_original"
 
 
-class CoRestaurant(Base):
-    __tablename__ = "restaurants"
+class CoTenant(Base):
+    __tablename__ = "tenants"
     __table_args__ = {"schema": _S}
 
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String(50), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    type = Column(String(20), nullable=False, default="chain")
+    plan = Column(String(50), nullable=False, default="pro")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class CoRestaurant(Base):
+    __tablename__ = "restaurants"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_restaurants_tenant_code"),
+        {"schema": _S},
+    )
+
     id = Column(Integer, primary_key=True)
-    code = Column(String(20), unique=True, nullable=False)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    code = Column(String(20), nullable=False)
     name = Column(String(100), nullable=False)
     base_url = Column(String(255), nullable=False)
     iiko_login = Column(String(100), nullable=False)
@@ -44,10 +62,14 @@ class CoWarehouse(Base):
 
 class CoUser(Base):
     __tablename__ = "users"
-    __table_args__ = {"schema": _S}
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        {"schema": _S},
+    )
 
     id = Column(Integer, primary_key=True)
-    email = Column(String(150), unique=True, nullable=False)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    email = Column(String(150), nullable=False)
     name = Column(String(100), nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, server_default="user")
@@ -75,10 +97,14 @@ class CoUserWarehouse(Base):
 
 class CoSupplier(Base):
     __tablename__ = "suppliers"
-    __table_args__ = {"schema": _S}
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "iiko_id", name="uq_suppliers_tenant_iiko_id"),
+        {"schema": _S},
+    )
 
     id = Column(Integer, primary_key=True)
-    iiko_id = Column(String(100), nullable=True, unique=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    iiko_id = Column(String(100), nullable=True)
     name = Column(String(150), nullable=False)
     bin = Column(String(20), nullable=True)
     contact = Column(String(255), nullable=True)
@@ -87,10 +113,14 @@ class CoSupplier(Base):
 
 class CoProduct(Base):
     __tablename__ = "products"
-    __table_args__ = {"schema": _S}
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "iiko_article_id", name="uq_products_tenant_iiko_article_id"),
+        {"schema": _S},
+    )
 
     id = Column(Integer, primary_key=True)
-    iiko_article_id = Column(String(100), nullable=True, unique=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    iiko_article_id = Column(String(100), nullable=True)
     name = Column(String(255), nullable=False)
     unit = Column(String(50), nullable=True)
     is_active = Column(Boolean, nullable=False, server_default="true")
@@ -141,18 +171,26 @@ class CoInvoice(Base):
 
 class CoSetting(Base):
     __tablename__ = "co_settings"
-    __table_args__ = {"schema": _S}
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "key", name="co_settings_pkey"),
+        {"schema": _S},
+    )
 
-    key = Column(String(100), primary_key=True)
+    key = Column(String(100), nullable=False)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
     value = Column(String, nullable=True)
 
 
 class CoAccount(Base):
     __tablename__ = "co_accounts"
-    __table_args__ = {"schema": _S}
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "account_iiko_id", name="uq_co_accounts_tenant_account_iiko_id"),
+        {"schema": _S},
+    )
 
     id = Column(Integer, primary_key=True)
-    account_iiko_id = Column(String(100), nullable=False, unique=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    account_iiko_id = Column(String(100), nullable=False)
     name = Column(String(255), nullable=False)
 
     groups = relationship("CoProductGroup", back_populates="account")
@@ -164,6 +202,7 @@ class CoWarehouseType(Base):
     __table_args__ = {"schema": _S}
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
     name = Column(String(100), nullable=False)
     account_id = Column(Integer, ForeignKey(f"{_S}.co_accounts.id", ondelete="SET NULL"), nullable=True)
 
@@ -176,6 +215,7 @@ class CoProductGroup(Base):
     __table_args__ = {"schema": _S}
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
     name = Column(String(255), nullable=False)
     account_id = Column(Integer, ForeignKey(f"{_S}.co_accounts.id", ondelete="SET NULL"), nullable=True)
 

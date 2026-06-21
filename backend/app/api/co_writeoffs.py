@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_utils import load_restaurant
 from app.api.co_auth import get_current_co_user, CoUser
 from app.models.co_models import (
     CoRestaurant, CoWarehouse, CoProduct,
@@ -53,16 +54,21 @@ router = APIRouter(prefix="/api/co/writeoffs", tags=["co-writeoffs"])
 _settings = APIRouter()
 
 
-def _check_access(user: CoUser, restaurant_id: int) -> None:
+def _check_access(user: CoUser, restaurant_id: int, db: Session) -> None:
+    load_restaurant(db, restaurant_id, user)  # tenant-гейт
     if user.role == "admin":
         return
     if restaurant_id not in [r.id for r in user.restaurants]:
         raise HTTPException(status_code=403, detail="Нет доступа к этому ресторану")
 
 
-def _user_restaurant_ids(user: CoUser) -> list[int]:
+def _user_restaurant_ids(user: CoUser, db: Session) -> list[int]:
     if user.role == "admin":
-        return None  # None means all
+        restaurants = db.query(CoRestaurant).filter(
+            CoRestaurant.tenant_id == user.tenant_id,
+            CoRestaurant.is_active == True,
+        ).all()
+        return [r.id for r in restaurants]
     return [r.id for r in user.restaurants]
 
 
@@ -81,26 +87,27 @@ def load_inventory(
     Счёт списания берётся из типа склада (warehouse_type.account).
     Возвращает дефицит по продуктам (Amount < 0).
     """
-    preset_setting = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY).first()
+    preset_setting = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY, CoSetting.tenant_id == user.tenant_id).first()
     preset_id = preset_setting.value if preset_setting else None
     if not preset_id:
         raise HTTPException(status_code=400, detail="Пресет инвентаризации не настроен.")
 
     # Chain-сервер — ресторан CO (https://original-group-co.iiko.it)
     chain_rest = (
-        db.query(CoRestaurant).filter(CoRestaurant.code == "CO").first()
-        or db.query(CoRestaurant).filter(CoRestaurant.is_active == True).first()
+        db.query(CoRestaurant).filter(CoRestaurant.code == "CO", CoRestaurant.tenant_id == user.tenant_id).first()
+        or db.query(CoRestaurant).filter(CoRestaurant.is_active == True, CoRestaurant.tenant_id == user.tenant_id).first()
     )
     if not chain_rest:
         raise HTTPException(status_code=400, detail="Нет активных ресторанов")
 
-    allowed_ids = _user_restaurant_ids(user)
+    allowed_ids = _user_restaurant_ids(user, db)
 
     # Словарь: store_name.lower() → (CoWarehouse, CoRestaurant)
     wh_by_store: dict[str, tuple] = {}
 
     for rest in db.query(CoRestaurant).filter(
-        CoRestaurant.is_active == True, CoRestaurant.code != "CO"
+        CoRestaurant.is_active == True, CoRestaurant.code != "CO",
+        CoRestaurant.tenant_id == user.tenant_id,
     ).all():
         if allowed_ids is not None and rest.id not in allowed_ids:
             continue
@@ -109,11 +116,11 @@ def load_inventory(
             if key not in wh_by_store:
                 wh_by_store[key] = (wh, rest)
 
-    all_products = [p for p in db.query(CoProduct).filter(CoProduct.is_active == True).all() if p.unit]
+    all_products = [p for p in db.query(CoProduct).filter(CoProduct.is_active == True, CoProduct.tenant_id == user.tenant_id).all() if p.unit]
     products_by_num: dict[str, CoProduct] = {p.unit: p for p in all_products}
     # Для поиска по названию (запасной вариант когда артикулы расходятся)
     products_by_name: dict[str, CoProduct] = {}
-    for p in db.query(CoProduct).filter(CoProduct.is_active == True).all():
+    for p in db.query(CoProduct).filter(CoProduct.is_active == True, CoProduct.tenant_id == user.tenant_id).all():
         key = p.name.strip().lower()
         if key not in products_by_name:
             products_by_name[key] = p
@@ -314,7 +321,7 @@ def create_acts(
     by_group: dict = defaultdict(list)
     skipped = []
     for item in body.items:
-        _check_access(user, item.restaurant_id)
+        _check_access(user, item.restaurant_id, db)
 
         wh = db.query(CoWarehouse).filter(
             CoWarehouse.id == item.warehouse_id,
@@ -370,14 +377,18 @@ def list_acts(
     db: Session = Depends(get_db),
     user: CoUser = Depends(get_current_co_user),
 ):
-    allowed_ids = _user_restaurant_ids(user)
-    q = db.query(CoWriteoffAct).order_by(CoWriteoffAct.act_date.desc(), CoWriteoffAct.id.desc())
+    allowed_ids = _user_restaurant_ids(user, db)
+    q = db.query(CoWriteoffAct).join(
+        CoRestaurant, CoWriteoffAct.restaurant_id == CoRestaurant.id
+    ).filter(
+        CoRestaurant.tenant_id == user.tenant_id
+    ).order_by(CoWriteoffAct.act_date.desc(), CoWriteoffAct.id.desc())
     if allowed_ids is not None:
         q = q.filter(CoWriteoffAct.restaurant_id.in_(allowed_ids))
 
     acts = q.limit(200).all()
 
-    rest_map = {r.id: r for r in db.query(CoRestaurant).all()}
+    rest_map = {r.id: r for r in db.query(CoRestaurant).filter(CoRestaurant.tenant_id == user.tenant_id).all()}
     wh_map = {w.id: w for w in db.query(CoWarehouse).all()}
 
     return [
@@ -411,9 +422,9 @@ def get_act(
     act = db.query(CoWriteoffAct).filter(CoWriteoffAct.id == act_id).first()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
-    _check_access(user, act.restaurant_id)
+    _check_access(user, act.restaurant_id, db)
 
-    rest = db.query(CoRestaurant).filter(CoRestaurant.id == act.restaurant_id).first()
+    rest = db.query(CoRestaurant).filter(CoRestaurant.id == act.restaurant_id, CoRestaurant.tenant_id == user.tenant_id).first()
     wh = db.query(CoWarehouse).filter(CoWarehouse.id == act.warehouse_id).first()
 
     items = []
@@ -458,9 +469,9 @@ def post_act_to_iiko(
     act = db.query(CoWriteoffAct).filter(CoWriteoffAct.id == act_id).first()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
-    _check_access(user, act.restaurant_id)
+    _check_access(user, act.restaurant_id, db)
 
-    restaurant = db.query(CoRestaurant).filter(CoRestaurant.id == act.restaurant_id).first()
+    restaurant = db.query(CoRestaurant).filter(CoRestaurant.id == act.restaurant_id, CoRestaurant.tenant_id == user.tenant_id).first()
     warehouse = db.query(CoWarehouse).filter(CoWarehouse.id == act.warehouse_id).first()
     if not warehouse or not warehouse.iiko_store_id:
         raise HTTPException(status_code=400, detail="Склад не привязан к iiko (нет iiko_store_id)")
@@ -541,8 +552,10 @@ def clear_history(
     user: CoUser = Depends(get_current_co_user),
 ):
     """Удаляет все акты (и позиции) для ресторанов, доступных пользователю."""
-    allowed_ids = _user_restaurant_ids(user)
-    q = db.query(CoWriteoffAct)
+    allowed_ids = _user_restaurant_ids(user, db)
+    q = db.query(CoWriteoffAct).join(
+        CoRestaurant, CoWriteoffAct.restaurant_id == CoRestaurant.id
+    ).filter(CoRestaurant.tenant_id == user.tenant_id)
     if allowed_ids is not None:
         q = q.filter(CoWriteoffAct.restaurant_id.in_(allowed_ids))
     acts = q.all()
@@ -558,19 +571,19 @@ class PresetIn(BaseModel):
 
 
 @_settings.get("/settings/preset")
-def get_preset(db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    s = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY).first()
+def get_preset(db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
+    s = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY, CoSetting.tenant_id == user.tenant_id).first()
     return {"preset_id": s.value if s else None}
 
 
 @_settings.post("/settings/preset")
-def save_preset(body: PresetIn, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def save_preset(body: PresetIn, db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
     pid = body.preset_id.strip()
-    s = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY).first()
+    s = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY, CoSetting.tenant_id == user.tenant_id).first()
     if s:
         s.value = pid
     else:
-        db.add(CoSetting(key=PRESET_KEY, value=pid))
+        db.add(CoSetting(key=PRESET_KEY, value=pid, tenant_id=user.tenant_id))
     db.commit()
     return {"preset_id": pid}
 
@@ -578,14 +591,14 @@ def save_preset(body: PresetIn, db: Session = Depends(get_db), _=Depends(get_cur
 # ── Settings: iikoChain server ────────────────────────────────────────────────
 
 @_settings.post("/settings/preset/activate")
-def activate_preset(db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    s = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY).first()
+def activate_preset(db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
+    s = db.query(CoSetting).filter(CoSetting.key == PRESET_KEY, CoSetting.tenant_id == user.tenant_id).first()
     if not s or not s.value:
         raise HTTPException(status_code=400, detail="Пресет не сохранён")
 
     chain_rest = (
-        db.query(CoRestaurant).filter(CoRestaurant.code == "CO").first()
-        or db.query(CoRestaurant).filter(CoRestaurant.is_active == True).first()
+        db.query(CoRestaurant).filter(CoRestaurant.code == "CO", CoRestaurant.tenant_id == user.tenant_id).first()
+        or db.query(CoRestaurant).filter(CoRestaurant.is_active == True, CoRestaurant.tenant_id == user.tenant_id).first()
     )
     if not chain_rest:
         raise HTTPException(status_code=400, detail="Нет активных ресторанов")
@@ -614,10 +627,10 @@ def activate_preset(db: Session = Depends(get_db), _=Depends(get_current_co_user
 # ── Settings: Accounts sync from iiko ─────────────────────────────────────────
 
 @_settings.post("/settings/sync-accounts")
-def sync_accounts(db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def sync_accounts(db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
     from app.services.co_iiko import _get_key
 
-    rest = db.query(CoRestaurant).filter(CoRestaurant.is_active == True).first()
+    rest = db.query(CoRestaurant).filter(CoRestaurant.is_active == True, CoRestaurant.tenant_id == user.tenant_id).first()
     if not rest:
         raise HTTPException(status_code=400, detail="Нет активных ресторанов")
 
@@ -639,30 +652,30 @@ def sync_accounts(db: Session = Depends(get_db), _=Depends(get_current_co_user))
         name = (item.get("name") or "").strip()
         if not iiko_uuid or not name:
             continue
-        existing = db.query(CoAccount).filter(CoAccount.account_iiko_id == iiko_uuid).first()
+        existing = db.query(CoAccount).filter(CoAccount.account_iiko_id == iiko_uuid, CoAccount.tenant_id == user.tenant_id).first()
         if existing:
             existing.name = name
             updated += 1
         else:
-            db.add(CoAccount(account_iiko_id=iiko_uuid, name=name))
+            db.add(CoAccount(account_iiko_id=iiko_uuid, name=name, tenant_id=user.tenant_id))
             added += 1
 
     db.commit()
-    total = db.query(CoAccount).count()
+    total = db.query(CoAccount).filter(CoAccount.tenant_id == user.tenant_id).count()
     return {"added": added, "updated": updated, "total": total}
 
 
 @_settings.get("/settings/accounts")
-def list_accounts(db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def list_accounts(db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
     return [
         {"id": a.id, "account_iiko_id": a.account_iiko_id, "name": a.name}
-        for a in db.query(CoAccount).order_by(CoAccount.name).all()
+        for a in db.query(CoAccount).filter(CoAccount.tenant_id == user.tenant_id).order_by(CoAccount.name).all()
     ]
 
 
 @_settings.delete("/settings/accounts/{acc_id}", status_code=204)
-def delete_account(acc_id: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    a = db.query(CoAccount).filter(CoAccount.id == acc_id).first()
+def delete_account(acc_id: int, db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
+    a = db.query(CoAccount).filter(CoAccount.id == acc_id, CoAccount.tenant_id == user.tenant_id).first()
     if not a:
         raise HTTPException(status_code=404, detail="Не найден")
     db.delete(a)
@@ -684,14 +697,14 @@ class WarehouseTypeUpdate(BaseModel):
 @_settings.get("/settings/warehouses")
 def list_all_warehouses(db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
     """Все склады (доступных пользователю ресторанов) с типами — для настройки типов."""
-    allowed_ids = _user_restaurant_ids(user)
+    allowed_ids = _user_restaurant_ids(user, db)
     q = db.query(CoWarehouse).join(
         CoRestaurant, CoWarehouse.restaurant_id == CoRestaurant.id
-    ).filter(CoRestaurant.is_active == True, CoRestaurant.code != "CO")
+    ).filter(CoRestaurant.is_active == True, CoRestaurant.code != "CO", CoRestaurant.tenant_id == user.tenant_id)
     if allowed_ids is not None:
         q = q.filter(CoWarehouse.restaurant_id.in_(allowed_ids))
     whs = q.order_by(CoWarehouse.restaurant_id, CoWarehouse.name).all()
-    rest_map = {r.id: r.name for r in db.query(CoRestaurant).all()}
+    rest_map = {r.id: r.name for r in db.query(CoRestaurant).filter(CoRestaurant.tenant_id == user.tenant_id).all()}
     return [
         {
             "id": w.id,
@@ -721,10 +734,10 @@ def set_warehouse_type(
     w = db.query(CoWarehouse).filter(CoWarehouse.id == wid).first()
     if not w:
         raise HTTPException(status_code=404, detail="Склад не найден")
-    _check_access(user, w.restaurant_id)
+    _check_access(user, w.restaurant_id, db)
     w.warehouse_type_id = body.warehouse_type_id
     db.commit()
-    wt = db.query(CoWarehouseType).filter(CoWarehouseType.id == w.warehouse_type_id).first() if w.warehouse_type_id else None
+    wt = db.query(CoWarehouseType).filter(CoWarehouseType.id == w.warehouse_type_id, CoWarehouseType.tenant_id == user.tenant_id).first() if w.warehouse_type_id else None
     return {"id": w.id, "warehouse_type_id": w.warehouse_type_id, "warehouse_type_name": wt.name if wt else None}
 
 
@@ -734,7 +747,7 @@ def list_products(
     user: CoUser = Depends(get_current_co_user),
 ):
     """Список всех товаров CO (для просмотра и синхронизации)."""
-    products = db.query(CoProduct).filter(CoProduct.is_active == True).order_by(CoProduct.name).all()
+    products = db.query(CoProduct).filter(CoProduct.is_active == True, CoProduct.tenant_id == user.tenant_id).order_by(CoProduct.name).all()
     return {
         "total": len(products),
         "products": [
@@ -751,8 +764,8 @@ def sync_products_all(
 ):
     """Синхронизация товаров с центрального сервера CO — один запрос вместо 16."""
     chain = (
-        db.query(CoRestaurant).filter(CoRestaurant.code == "CO").first()
-        or db.query(CoRestaurant).filter(CoRestaurant.is_active == True).first()
+        db.query(CoRestaurant).filter(CoRestaurant.code == "CO", CoRestaurant.tenant_id == user.tenant_id).first()
+        or db.query(CoRestaurant).filter(CoRestaurant.is_active == True, CoRestaurant.tenant_id == user.tenant_id).first()
     )
     if not chain:
         raise HTTPException(status_code=400, detail="Центральный сервер CO не найден")
@@ -769,7 +782,7 @@ def sync_products_all(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка соединения с iiko CO: {e}")
 
-    existing = {p.iiko_article_id: p for p in db.query(CoProduct).all() if p.iiko_article_id}
+    existing = {p.iiko_article_id: p for p in db.query(CoProduct).filter(CoProduct.tenant_id == user.tenant_id).all() if p.iiko_article_id}
     added = updated = 0
 
     for item in items:
@@ -786,7 +799,7 @@ def sync_products_all(
         else:
             sp = db.begin_nested()
             try:
-                p = CoProduct(iiko_article_id=iiko_id, name=name, unit=item.get("num", ""), is_active=True)
+                p = CoProduct(iiko_article_id=iiko_id, name=name, unit=item.get("num", ""), is_active=True, tenant_id=user.tenant_id)
                 db.add(p)
                 db.flush()
                 sp.commit()
@@ -794,20 +807,20 @@ def sync_products_all(
                 added += 1
             except Exception:
                 sp.rollback()
-                p = db.query(CoProduct).filter(CoProduct.iiko_article_id == iiko_id).first()
+                p = db.query(CoProduct).filter(CoProduct.iiko_article_id == iiko_id, CoProduct.tenant_id == user.tenant_id).first()
                 if p:
                     p.name = name
                     existing[iiko_id] = p
                     updated += 1
 
     db.commit()
-    total = db.query(CoProduct).filter(CoProduct.is_active == True).count()
+    total = db.query(CoProduct).filter(CoProduct.is_active == True, CoProduct.tenant_id == user.tenant_id).count()
     return {"added": added, "updated": updated, "total": total, "errors": []}
 
 
 @_settings.get("/settings/warehouse-types")
-def list_warehouse_types(db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    types = db.query(CoWarehouseType).order_by(CoWarehouseType.name).all()
+def list_warehouse_types(db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
+    types = db.query(CoWarehouseType).filter(CoWarehouseType.tenant_id == user.tenant_id).order_by(CoWarehouseType.name).all()
     return [
         {
             "id": t.id,
@@ -821,8 +834,8 @@ def list_warehouse_types(db: Session = Depends(get_db), _=Depends(get_current_co
 
 
 @_settings.post("/settings/warehouse-types", status_code=201)
-def create_warehouse_type(body: WarehouseTypeIn, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    t = CoWarehouseType(name=body.name.strip(), account_id=body.account_id)
+def create_warehouse_type(body: WarehouseTypeIn, db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
+    t = CoWarehouseType(name=body.name.strip(), account_id=body.account_id, tenant_id=user.tenant_id)
     db.add(t)
     db.commit()
     db.refresh(t)
@@ -834,9 +847,9 @@ def update_warehouse_type(
     type_id: int,
     body: WarehouseTypeUpdate,
     db: Session = Depends(get_db),
-    _=Depends(get_current_co_user),
+    user: CoUser = Depends(get_current_co_user),
 ):
-    t = db.query(CoWarehouseType).filter(CoWarehouseType.id == type_id).first()
+    t = db.query(CoWarehouseType).filter(CoWarehouseType.id == type_id, CoWarehouseType.tenant_id == user.tenant_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Тип склада не найден")
     if body.name is not None:
@@ -850,8 +863,8 @@ def update_warehouse_type(
 
 
 @_settings.delete("/settings/warehouse-types/{type_id}", status_code=204)
-def delete_warehouse_type(type_id: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    t = db.query(CoWarehouseType).filter(CoWarehouseType.id == type_id).first()
+def delete_warehouse_type(type_id: int, db: Session = Depends(get_db), user: CoUser = Depends(get_current_co_user)):
+    t = db.query(CoWarehouseType).filter(CoWarehouseType.id == type_id, CoWarehouseType.tenant_id == user.tenant_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Не найден")
     db.delete(t)
