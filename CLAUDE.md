@@ -1,6 +1,6 @@
 # CLAUDE.md — RestOn / Coffee Original
 
-Состояние на 2026-06-21. Проект обслуживает одного клиента — **Coffee Original (CO)**.
+Состояние на 2026-06-29. Проект обслуживает одного клиента — **Coffee Original (CO)**.
 Старый код «Reston» вырезан рефакторингом (см. git `be89c9a`), осталась только CO-логика.
 Идёт перевод на **мультитенантность (SaaS)** — см. раздел ниже. Alembic head: `0055`.
 
@@ -118,6 +118,60 @@ nginx проксирует `backend:8000` и `frontend:5173`.
 
 ---
 
+## Бренд RestOn
+
+### Цвета (использовать ВЕЗДЕ — в коде, компонентах, стилях)
+
+| Токен Tailwind        | Hex       | Назначение                                          |
+|-----------------------|-----------|-----------------------------------------------------|
+| `brand-navy` / `brand-dark` | `#0F2D3D` | Primary Navy — заголовки, sidebar, структура        |
+| `brand-green` / `brand-yellow` | `#0D9373` | Accent Green — кнопки, активный пункт меню, success |
+| `brand-bg`            | `#F8F7F4` | Warm off-white — фон страниц                        |
+| `brand-muted`         | `#64748b`  | Вторичный текст, подписи                            |
+| `brand-border`        | `#E2E8F0` | Границы карточек и инпутов                          |
+| `brand-red`           | `#EF4444` | Только ошибки (errors)                              |
+| `brand-amber`         | `#F59E0B` | Только предупреждения (warnings/pending)            |
+
+> **Жёлтый (`#FDB714`) — больше не используется.** `brand-yellow` теперь = `#0D9373` (green alias для обратной совместимости).
+
+### SVG Бренд-файлы
+
+**Хранятся в двух местах:**
+- Исходники: `/opt/reston/brand/` (эталон)
+- Frontend public: `/opt/reston/frontend/public/brand/` (используются в браузере)
+- GitHub источник: `https://github.com/Shalkar-Mukazhan/new-reston/tree/main/brand`
+
+**Файлы и правила использования:**
+
+| Файл | Содержимое | Когда использовать |
+|------|-----------|---------------------|
+| `logo-dark.svg` | Белый R-иконка + белый "RestOn" | **Тёмный/navy фон** (sidebar, правая панель login) |
+| `logo-light.svg` | Navy R-иконка + navy "RestOn" | **Светлый/белый фон** (login форма, страницы) |
+| `icon-dark.svg` | Белая иконка R (без текста) | Маленький вариант на **тёмном** фоне |
+| `icon-light.svg` | Navy иконка R (без текста) | Маленький вариант на **светлом** фоне |
+| `wordmark-primary.svg` | "RestOn" текст navy + green "On" | Только текст, для светлых поверхностей |
+| `wordmark-white.svg` | "RestOn" текст белый | Только текст, для тёмных поверхностей |
+| `favicon.svg` | Квадратный R-иконка | Favicon браузера |
+
+**Favicon PNG (конвертированы из SVG через rsvg-convert):**
+- `/frontend/public/favicon-32.png` — 32×32 (вкладка браузера)
+- `/frontend/public/apple-touch-icon.png` — 180×180 (iOS)
+- `/frontend/public/favicon-192.png` — 192×192 (Android)
+
+**Логотип не перерисовывать и не менять цвета!**
+
+### Правила дизайна (для новых компонентов)
+
+- **Стиль**: premium B2B SaaS, чистый, не Bootstrap-панель
+- **Sidebar**: navy фон `#0F2D3D`, активный пункт = `bg-white/10` + `border-l-2 border-brand-green` + белый текст
+- **Кнопки primary**: `bg-brand-green text-white` (зелёные, НЕ жёлтые)
+- **Карточки**: `bg-white rounded-xl border border-brand-border shadow-sm` (класс `.card`)
+- **Статус-chips**: badge-ok (зелёный), badge-warn (amber), badge-over (red), badge-muted (grey), badge-blue
+- **Фон страниц**: `bg-brand-bg` (`#F8F7F4` warm off-white)
+- **RestOn** — название платформы. **Coffee Original** — только workspace/клиент внутри системы.
+
+---
+
 ## Карта файлов
 
 **Backend** (`backend/app/`):
@@ -129,8 +183,25 @@ nginx проксирует `backend:8000` и `frontend:5173`.
 - `core/security.py`, `core/database.py`, `core/config.py`
 - `alembic/` — миграции (version_table в схеме `coffee_original`)
 
-**Frontend** (`frontend/src/`): `api/coClient.ts`, `pages/co/CoLoginPage.tsx`,
-`CoAdminPage.tsx`, `CoInvoicesPage.tsx`.
+**Frontend** (`frontend/src/`):
+- `pages/co/CoLoginPage.tsx` — split-screen login (logo-light.svg слева, logo-dark.svg справа)
+- `pages/co/CoLayout.tsx` — sidebar (navy, icon-dark.svg) + topbar (icon-light.svg)
+- `pages/co/CoDashboardPage.tsx` — обзорный dashboard (KPI, Smart Upload, таблица)
+- `pages/co/CoAdminPage.tsx` — CRUD: рестораны, склады, товары, поставщики, маппинг, пользователи
+- `pages/co/CoInvoicesPage.tsx` — загрузка и обработка накладных (OCR)
+- `pages/co/CoWriteoffPage.tsx` — акты списания
+- `api/coClient.ts` — axios клиент для `/api/co/...`
+
+**Маршруты frontend:**
+- `/login` → CoLoginPage
+- `/dashboard` → CoDashboardPage (admin после логина)
+- `/invoices` → CoInvoicesPage (user после логина)
+- `/writeoffs` → CoWriteoffPage
+- `/admin?tab=<tab>` → CoAdminPage (tabs: restaurants, warehouses, products, suppliers, mapping, users, containers)
+
+**Бренд-файлы:**
+- `/opt/reston/brand/` — эталонные SVG/PNG
+- `/opt/reston/frontend/public/brand/` — копия для браузера (обновлять синхронно!)
 
 ---
 
@@ -155,7 +226,26 @@ docker ps --filter name=reston
 
 ---
 
+## Частые команды (дополнение)
+
+```bash
+# Синхронизировать бренд-файлы (GitHub → сервер → frontend/public)
+BASE="https://raw.githubusercontent.com/Shalkar-Mukazhan/new-reston/main/brand"
+for f in favicon.svg icon-dark.svg icon-light.svg logo-dark.svg logo-light.svg wordmark-primary.svg wordmark-white.svg; do
+  curl -sL "$BASE/$f" -o "/opt/reston/brand/$f"
+  cp "/opt/reston/brand/$f" "/opt/reston/frontend/public/brand/$f"
+done
+# После обновления favicon.svg — перегенерировать PNG:
+rsvg-convert -w 32 -h 32 /opt/reston/brand/favicon.svg -o /opt/reston/frontend/public/favicon-32.png
+rsvg-convert -w 180 -h 180 /opt/reston/brand/favicon.svg -o /opt/reston/frontend/public/apple-touch-icon.png
+
+# Перезапуск frontend (код живой через mount, restart достаточно)
+docker restart reston-frontend-1
+```
+
+---
+
 ## Тестовые пользователи
 
-- `admin@coffee.kz` / `admin123` — admin → `/co/admin`
-- `karina@coffee.kz` / `1234` — user → `/co/invoices`
+- `admin@coffee.kz` / `admin123` — admin → `/dashboard` (после логина)
+- `karina@coffee.kz` / `1234` — user → `/invoices` (после логина)

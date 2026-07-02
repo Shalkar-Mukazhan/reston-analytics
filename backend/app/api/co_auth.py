@@ -11,7 +11,7 @@ from app.core.security import (
     verify_password, hash_password,
     create_access_token, create_refresh_token, decode_token,
 )
-from app.models.co_models import CoUser
+from app.models.co_models import CoUser, CoTenant, CoIikoConnection
 
 router = APIRouter(prefix="/api/co/auth", tags=["co-auth"])
 
@@ -87,13 +87,30 @@ def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me")
-def me(user: CoUser = Depends(get_current_co_user)):
+def me(
+    user: CoUser = Depends(get_current_co_user),
+    db: Session = Depends(get_db)
+):
+    tenant = db.query(CoTenant).filter(
+        CoTenant.id == user.tenant_id
+    ).first()
+
+    iiko_connected = db.query(CoIikoConnection).filter(
+        CoIikoConnection.tenant_id == user.tenant_id,
+        CoIikoConnection.is_active == True,
+        CoIikoConnection.base_url != ""
+    ).first() is not None
+
     return {
         "id": user.id,
         "email": user.email,
         "name": user.name,
         "role": user.role,
         "tenant_id": user.tenant_id,
+        "tenant_name": tenant.company_name or tenant.name if tenant else "",
+        "tenant_plan": tenant.plan if tenant else "trial",
+        "onboarding_complete": tenant.onboarding_complete if tenant else False,
+        "iiko_connected": iiko_connected,
         "restaurant_ids": [r.id for r in user.restaurants],
     }
 

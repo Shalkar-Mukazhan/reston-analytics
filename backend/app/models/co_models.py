@@ -21,6 +21,61 @@ class CoTenant(Base):
     plan = Column(String(50), nullable=False, default="pro")
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False)
+    company_name = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    onboarding_complete = Column(Boolean,
+                                 nullable=False, default=False)
+
+
+class CoIikoConnection(Base):
+    __tablename__ = "iiko_connections"
+    __table_args__ = {"schema": _S}
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer,
+                       ForeignKey(f"{_S}.tenants.id"),
+                       nullable=False)
+    name = Column(String(255), nullable=False)
+    base_url = Column(String(255), nullable=False)
+    login = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class CoSubscription(Base):
+    __tablename__ = "subscriptions"
+    __table_args__ = {"schema": _S}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    plan = Column(String(50), nullable=False, default="trial")
+    status = Column(String(50), nullable=False, default="active")
+    trial_ends_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class CoInvoiceUsage(Base):
+    __tablename__ = "invoice_usage"
+    __table_args__ = {"schema": _S}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey(f"{_S}.tenants.id"), nullable=False)
+    year_month = Column(String(7), nullable=False)
+    count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class CoGoogleOAuth(Base):
+    __tablename__ = "google_oauth"
+    __table_args__ = {"schema": _S}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey(f"{_S}.users.id"), nullable=False)
+    google_sub = Column(String(255), unique=True, nullable=False)
+    email = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False)
 
 
 class CoRestaurant(Base):
