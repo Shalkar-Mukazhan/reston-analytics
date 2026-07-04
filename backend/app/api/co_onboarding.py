@@ -8,7 +8,7 @@ import hashlib, httpx
 from app.core.database import get_db
 from app.api.co_auth import get_current_co_user
 from app.models.co_models import (
-    CoUser, CoTenant, CoIikoConnection
+    CoUser, CoTenant, CoIikoConnection, CoRestaurant, CoUserRestaurant
 )
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -76,7 +76,7 @@ def test_iiko(
                 "message": f"Сервер недоступен: {str(e)}"}
 
 
-# Шаг 2 — сохранить iiko подключение
+# Шаг 2 — сохранить iiko подключение (upsert — один connection на тенанта)
 @router.post("/iiko/save")
 def save_iiko(
     body: IikoData,
@@ -87,16 +87,28 @@ def save_iiko(
         body.password.encode()
     ).hexdigest()
 
-    conn = CoIikoConnection(
-        tenant_id=user.tenant_id,
-        name=body.name,
-        base_url=body.base_url.rstrip("/"),
-        login=body.login,
-        password_hash=password_sha1,
-        is_active=True,
-        created_at=datetime.now(timezone.utc)
-    )
-    db.add(conn)
+    conn = db.query(CoIikoConnection).filter(
+        CoIikoConnection.tenant_id == user.tenant_id
+    ).first()
+
+    if conn:
+        conn.name = body.name
+        conn.base_url = body.base_url.rstrip("/")
+        conn.login = body.login
+        conn.password_hash = password_sha1
+        conn.is_active = True
+    else:
+        conn = CoIikoConnection(
+            tenant_id=user.tenant_id,
+            name=body.name,
+            base_url=body.base_url.rstrip("/"),
+            login=body.login,
+            password_hash=password_sha1,
+            is_active=True,
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(conn)
+
     db.commit()
     db.refresh(conn)
     return {"ok": True, "connection_id": conn.id}
@@ -111,9 +123,52 @@ def complete_onboarding(
     tenant = db.query(CoTenant).filter(
         CoTenant.id == user.tenant_id
     ).first()
+    if not tenant:
+        raise HTTPException(404, "Тенант не найден")
+
     tenant.onboarding_complete = True
+
+    # Мост онбординг → первый ресторан: если у тенанта есть активное iiko-
+    # подключение, но ещё нет ни одного ресторана — создать ресторан "main"
+    # из данных подключения, иначе после онбординга экран будет пустым
+    # (рабочий код читает base_url/iiko_login/iiko_password_hash из CoRestaurant,
+    # а не из iiko_connections).
+    conn = db.query(CoIikoConnection).filter(
+        CoIikoConnection.tenant_id == user.tenant_id,
+        CoIikoConnection.is_active == True,
+        CoIikoConnection.base_url != ""
+    ).first()
+
+    existing = db.query(CoRestaurant).filter(
+        CoRestaurant.tenant_id == user.tenant_id
+    ).first()
+
+    restaurant_created = conn is not None and existing is None
+
+    if conn and not existing:
+        restaurant = CoRestaurant(
+            tenant_id=user.tenant_id,
+            code="main",
+            name=tenant.company_name or tenant.name,
+            base_url=conn.base_url,
+            iiko_login=conn.login,
+            iiko_password_hash=conn.password_hash,
+            is_active=True,
+        )
+        db.add(restaurant)
+        db.flush()
+
+        user_rest = CoUserRestaurant(
+            user_id=user.id,
+            restaurant_id=restaurant.id
+        )
+        db.add(user_rest)
+
     db.commit()
-    return {"ok": True}
+    return {
+        "ok": True,
+        "restaurant_created": restaurant_created,
+    }
 
 
 # Получить статус онбординга

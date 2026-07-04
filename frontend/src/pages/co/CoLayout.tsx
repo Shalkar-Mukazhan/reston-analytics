@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FileText, FileX2, ArrowLeftRight, Warehouse,
   Store, Truck, RefreshCw, Users, LogOut, Menu, X,
   AlertCircle, History, Plug, Building2, ClipboardList,
-  ChevronDown, Wifi,
+  ChevronDown, Wifi, FileCheck2,
 } from 'lucide-react'
 
 interface NavItem {
@@ -55,6 +55,13 @@ const NAV_GROUPS: NavGroup[] = [
         href: '/admin?tab=inventory',
         adminOnly: false,
         isActive: (p, s) => p === '/admin' && s.includes('tab=inventory'),
+      },
+      {
+        label: 'Акт сверки',
+        icon: FileCheck2,
+        href: '/reconciliation',
+        adminOnly: false,
+        isActive: (p) => p === '/reconciliation',
       },
     ],
   },
@@ -150,6 +157,7 @@ function getPageTitle(pathname: string, search: string): string {
     '/dashboard': 'Обзор',
     '/invoices': 'Накладные',
     '/writeoffs': 'Акты списания',
+    '/reconciliation': 'Акт сверки',
   }
   if (map[pathname]) return map[pathname]
   if (pathname === '/admin') {

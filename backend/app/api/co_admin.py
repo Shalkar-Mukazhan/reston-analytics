@@ -15,6 +15,10 @@ from app.models.co_models import (
     CoSupplier, CoProduct, CoProductMapping, CoProductContainer, CoInvoice, CoInvoiceItem,
 )
 from app.api.co_auth import require_co_admin, get_current_co_user, CoUser as _CoUser
+from app.core.tenant_utils import (
+    load_restaurant, load_warehouse, load_supplier,
+    load_product, load_mapping, load_container,
+)
 
 router = APIRouter(prefix="/api/co/admin", tags=["co-admin"])
 
@@ -92,22 +96,33 @@ def _rest_dict(r: CoRestaurant) -> dict:
 @router.get("/restaurants")
 def list_restaurants(db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     if user.role == "admin":
-        rows = db.query(CoRestaurant).order_by(CoRestaurant.name).all()
+        rows = db.query(CoRestaurant).filter(
+            CoRestaurant.tenant_id == user.tenant_id
+        ).order_by(CoRestaurant.name).all()
     else:
         allowed_ids = {r.id for r in user.restaurants}
-        rows = db.query(CoRestaurant).filter(CoRestaurant.id.in_(allowed_ids)).order_by(CoRestaurant.name).all()
+        rows = db.query(CoRestaurant).filter(
+            CoRestaurant.tenant_id == user.tenant_id,
+            CoRestaurant.id.in_(allowed_ids),
+        ).order_by(CoRestaurant.name).all()
     return [_rest_dict(r) for r in rows]
 
 
 @router.post("/restaurants/quick", status_code=201)
-def quick_create_restaurant(body: "QuickRestaurantIn", db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def quick_create_restaurant(body: "QuickRestaurantIn", db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Create restaurant copying iiko credentials from first existing restaurant."""
-    if db.query(CoRestaurant).filter(CoRestaurant.code == body.code.strip().upper()).first():
+    if db.query(CoRestaurant).filter(
+        CoRestaurant.tenant_id == user.tenant_id,
+        CoRestaurant.code == body.code.strip().upper(),
+    ).first():
         raise HTTPException(status_code=400, detail="Ресторан с таким кодом уже существует")
-    template = db.query(CoRestaurant).first()
+    template = db.query(CoRestaurant).filter(
+        CoRestaurant.tenant_id == user.tenant_id
+    ).first()
     if not template:
         raise HTTPException(status_code=400, detail="Нет ресторанов для копирования настроек iiko")
     r = CoRestaurant(
+        tenant_id=user.tenant_id,
         code=body.code.strip().upper(),
         name=body.name.strip(),
         base_url=_normalize_url(body.base_url),
@@ -121,10 +136,14 @@ def quick_create_restaurant(body: "QuickRestaurantIn", db: Session = Depends(get
 
 
 @router.post("/restaurants", status_code=201)
-def create_restaurant(body: RestaurantIn, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    if db.query(CoRestaurant).filter(CoRestaurant.code == body.code.strip()).first():
+def create_restaurant(body: RestaurantIn, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    if db.query(CoRestaurant).filter(
+        CoRestaurant.tenant_id == user.tenant_id,
+        CoRestaurant.code == body.code.strip(),
+    ).first():
         raise HTTPException(status_code=400, detail="Ресторан с таким кодом уже существует")
     r = CoRestaurant(
+        tenant_id=user.tenant_id,
         code=body.code.strip().upper(),
         name=body.name.strip(),
         base_url=_normalize_url(body.base_url),
@@ -138,10 +157,8 @@ def create_restaurant(body: RestaurantIn, db: Session = Depends(get_db), _=Depen
 
 
 @router.patch("/restaurants/{rid}")
-def update_restaurant(rid: int, body: RestaurantUpdate, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    r = db.query(CoRestaurant).filter(CoRestaurant.id == rid).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+def update_restaurant(rid: int, body: RestaurantUpdate, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    r = load_restaurant(db, rid, user)
     if body.name is not None:
         r.name = body.name.strip()
     if body.base_url is not None:
@@ -161,10 +178,8 @@ def update_restaurant(rid: int, body: RestaurantUpdate, db: Session = Depends(ge
 
 
 @router.delete("/restaurants/{rid}", status_code=204)
-def delete_restaurant(rid: int, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    r = db.query(CoRestaurant).filter(CoRestaurant.id == rid).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+def delete_restaurant(rid: int, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    r = load_restaurant(db, rid, user)
     db.delete(r)
     db.commit()
 
@@ -172,11 +187,9 @@ def delete_restaurant(rid: int, db: Session = Depends(get_db), _=Depends(require
 # ── iiko sync: warehouses ────────────────────────────────────────────────────
 
 @router.post("/restaurants/{rid}/sync/warehouses")
-def sync_warehouses(rid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def sync_warehouses(rid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Pull stores from iiko → upsert into restaurant_warehouses."""
-    r = db.query(CoRestaurant).filter(CoRestaurant.id == rid).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+    r = load_restaurant(db, rid, user)
 
     key = _iiko_session(r)
     resp = requests.get(
@@ -238,11 +251,9 @@ def sync_warehouses(rid: int, db: Session = Depends(get_db), _=Depends(get_curre
 # ── iiko sync: products ──────────────────────────────────────────────────────
 
 @router.post("/restaurants/{rid}/sync/products")
-def sync_products(rid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def sync_products(rid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Pull nomenclature from iiko → upsert into products."""
-    r = db.query(CoRestaurant).filter(CoRestaurant.id == rid).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+    r = load_restaurant(db, rid, user)
 
     key = _iiko_session(r)
     resp = requests.get(
@@ -253,7 +264,11 @@ def sync_products(rid: int, db: Session = Depends(get_db), _=Depends(get_current
     resp.raise_for_status()
     items = resp.json()
 
-    existing = {p.iiko_article_id: p for p in db.query(CoProduct).all() if p.iiko_article_id}
+    existing = {
+        p.iiko_article_id: p
+        for p in db.query(CoProduct).filter(CoProduct.tenant_id == user.tenant_id).all()
+        if p.iiko_article_id
+    }
     added = updated = containers_added = 0
 
     for item in items:
@@ -271,7 +286,7 @@ def sync_products(rid: int, db: Session = Depends(get_db), _=Depends(get_current
         else:
             sp = db.begin_nested()
             try:
-                product = CoProduct(iiko_article_id=iiko_id, name=name, unit=item.get("num", ""))
+                product = CoProduct(tenant_id=user.tenant_id, iiko_article_id=iiko_id, name=name, unit=item.get("num", ""))
                 db.add(product)
                 db.flush()
                 sp.commit()
@@ -280,7 +295,10 @@ def sync_products(rid: int, db: Session = Depends(get_db), _=Depends(get_current
             except Exception:
                 # Concurrent sync already inserted this product — rollback savepoint only
                 sp.rollback()
-                product = db.query(CoProduct).filter(CoProduct.iiko_article_id == iiko_id).first()
+                product = db.query(CoProduct).filter(
+                    CoProduct.iiko_article_id == iiko_id,
+                    CoProduct.tenant_id == user.tenant_id,
+                ).first()
                 if not product:
                     continue
                 product.name = name
@@ -319,11 +337,9 @@ def sync_products(rid: int, db: Session = Depends(get_db), _=Depends(get_current
 # ── iiko sync: suppliers ─────────────────────────────────────────────────────
 
 @router.post("/restaurants/{rid}/sync/suppliers")
-def sync_suppliers(rid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def sync_suppliers(rid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Pull suppliers from iiko → upsert into suppliers."""
-    r = db.query(CoRestaurant).filter(CoRestaurant.id == rid).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+    r = load_restaurant(db, rid, user)
 
     key = _iiko_session(r)
     resp = requests.get(
@@ -352,7 +368,7 @@ def sync_suppliers(rid: int, db: Session = Depends(get_db), _=Depends(get_curren
             "contact": (item.findtext("phone") or item.findtext("email") or "").strip() or None,
         })
 
-    all_existing = db.query(CoSupplier).all()
+    all_existing = db.query(CoSupplier).filter(CoSupplier.tenant_id == user.tenant_id).all()
     by_iiko_id = {s.iiko_id: s for s in all_existing if s.iiko_id}
     # Ручные поставщики (без iiko_id) — матчим по БИН или по имени
     by_bin  = {s.bin.strip(): s for s in all_existing if not s.iiko_id and s.bin}
@@ -382,7 +398,7 @@ def sync_suppliers(rid: int, db: Session = Depends(get_db), _=Depends(get_curren
                     manual.contact = s["contact"]
                 linked += 1
             else:
-                db.add(CoSupplier(**s))
+                db.add(CoSupplier(tenant_id=user.tenant_id, **s))
                 added += 1
 
     db.commit()
@@ -405,6 +421,7 @@ class WarehouseUpdate(BaseModel):
 
 @router.get("/restaurants/{rid}/warehouses")
 def list_warehouses(rid: int, active_only: bool = False, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    load_restaurant(db, rid, user)  # tenant-гейт
     if user.role != "admin":
         allowed_ids = {r.id for r in user.restaurants}
         if rid not in allowed_ids:
@@ -425,9 +442,8 @@ def list_warehouses(rid: int, active_only: bool = False, db: Session = Depends(g
 
 
 @router.post("/restaurants/{rid}/warehouses", status_code=201)
-def create_warehouse(rid: int, body: WarehouseIn, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    if not db.query(CoRestaurant).filter(CoRestaurant.id == rid).first():
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+def create_warehouse(rid: int, body: WarehouseIn, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    load_restaurant(db, rid, user)  # tenant-гейт
     w = CoWarehouse(restaurant_id=rid, name=body.name.strip(), iiko_store_id=body.iiko_store_id)
     db.add(w)
     db.commit()
@@ -436,10 +452,8 @@ def create_warehouse(rid: int, body: WarehouseIn, db: Session = Depends(get_db),
 
 
 @router.patch("/warehouses/{wid}")
-def update_warehouse(wid: int, body: WarehouseUpdate, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    w = db.query(CoWarehouse).filter(CoWarehouse.id == wid).first()
-    if not w:
-        raise HTTPException(status_code=404, detail="Склад не найден")
+def update_warehouse(wid: int, body: WarehouseUpdate, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    w = load_warehouse(db, wid, user)
     if body.name is not None:
         w.name = body.name.strip()
     if body.iiko_store_id is not None:
@@ -458,11 +472,9 @@ def update_warehouse(wid: int, body: WarehouseUpdate, db: Session = Depends(get_
 
 
 @router.post("/warehouses/{wid}/set-writeoff-default", status_code=200)
-def set_writeoff_default(wid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def set_writeoff_default(wid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Помечает склад как склад для списания (один на ресторан). Снимает флаг с остальных складов того же ресторана."""
-    w = db.query(CoWarehouse).filter(CoWarehouse.id == wid).first()
-    if not w:
-        raise HTTPException(status_code=404, detail="Склад не найден")
+    w = load_warehouse(db, wid, user)
     # снимаем флаг у других складов этого ресторана
     db.query(CoWarehouse).filter(
         CoWarehouse.restaurant_id == w.restaurant_id,
@@ -474,11 +486,9 @@ def set_writeoff_default(wid: int, db: Session = Depends(get_db), _=Depends(get_
 
 
 @router.get("/restaurants/{rid}/iiko/warehouses")
-def fetch_iiko_warehouses(rid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def fetch_iiko_warehouses(rid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Return warehouses from iiko without saving — marks which are already added."""
-    r = db.query(CoRestaurant).filter(CoRestaurant.id == rid).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+    r = load_restaurant(db, rid, user)
     key = _iiko_session(r)
     resp = requests.get(
         f"{r.base_url}/resto/api/corporation/stores",
@@ -506,10 +516,9 @@ def fetch_iiko_warehouses(rid: int, db: Session = Depends(get_db), _=Depends(get
 
 
 @router.delete("/restaurants/{rid}/warehouses")
-def clear_warehouses(rid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
+def clear_warehouses(rid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
     """Delete all warehouses for a restaurant that have no invoices attached."""
-    if not db.query(CoRestaurant).filter(CoRestaurant.id == rid).first():
-        raise HTTPException(status_code=404, detail="Ресторан не найден")
+    load_restaurant(db, rid, user)  # tenant-гейт
     used_ids = {row[0] for row in db.query(CoInvoice.warehouse_id).filter(CoInvoice.restaurant_id == rid).all()}
     q = db.query(CoWarehouse).filter(CoWarehouse.restaurant_id == rid)
     if used_ids:
@@ -521,10 +530,8 @@ def clear_warehouses(rid: int, db: Session = Depends(get_db), _=Depends(get_curr
 
 
 @router.delete("/warehouses/{wid}", status_code=204)
-def delete_warehouse(wid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    w = db.query(CoWarehouse).filter(CoWarehouse.id == wid).first()
-    if not w:
-        raise HTTPException(status_code=404, detail="Склад не найден")
+def delete_warehouse(wid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    w = load_warehouse(db, wid, user)
     db.delete(w)
     db.commit()
 
@@ -549,13 +556,15 @@ def _sup_dict(s: CoSupplier) -> dict:
 
 
 @router.get("/suppliers")
-def list_suppliers(db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    return [_sup_dict(s) for s in db.query(CoSupplier).order_by(CoSupplier.name).all()]
+def list_suppliers(db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    return [_sup_dict(s) for s in db.query(CoSupplier).filter(
+        CoSupplier.tenant_id == user.tenant_id
+    ).order_by(CoSupplier.name).all()]
 
 
 @router.post("/suppliers", status_code=201)
-def create_supplier(body: SupplierIn, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    s = CoSupplier(name=body.name.strip(), bin=body.bin, contact=body.contact)
+def create_supplier(body: SupplierIn, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    s = CoSupplier(name=body.name.strip(), bin=body.bin, contact=body.contact, tenant_id=user.tenant_id)
     db.add(s)
     db.commit()
     db.refresh(s)
@@ -563,10 +572,8 @@ def create_supplier(body: SupplierIn, db: Session = Depends(get_db), _=Depends(r
 
 
 @router.patch("/suppliers/{sid}")
-def update_supplier(sid: int, body: SupplierUpdate, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    s = db.query(CoSupplier).filter(CoSupplier.id == sid).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Поставщик не найден")
+def update_supplier(sid: int, body: SupplierUpdate, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    s = load_supplier(db, sid, user)
     if body.name is not None:
         s.name = body.name.strip()
     if body.bin is not None:
@@ -580,10 +587,8 @@ def update_supplier(sid: int, body: SupplierUpdate, db: Session = Depends(get_db
 
 
 @router.delete("/suppliers/{sid}", status_code=204)
-def delete_supplier(sid: int, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    s = db.query(CoSupplier).filter(CoSupplier.id == sid).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Поставщик не найден")
+def delete_supplier(sid: int, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    s = load_supplier(db, sid, user)
     db.delete(s)
     db.commit()
 
@@ -594,9 +599,9 @@ def delete_supplier(sid: int, db: Session = Depends(get_db), _=Depends(require_c
 def list_products(
     search: Optional[str] = None,
     db: Session = Depends(get_db),
-    _=Depends(get_current_co_user),
+    user: _CoUser = Depends(get_current_co_user),
 ):
-    q = db.query(CoProduct)
+    q = db.query(CoProduct).filter(CoProduct.tenant_id == user.tenant_id)
     if search:
         q = q.filter(CoProduct.name.ilike(f"%{search}%"))
     products = q.order_by(CoProduct.name).limit(2000).all()
@@ -604,10 +609,8 @@ def list_products(
 
 
 @router.patch("/products/{pid}")
-def update_product(pid: int, body: dict, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    p = db.query(CoProduct).filter(CoProduct.id == pid).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Товар не найден")
+def update_product(pid: int, body: dict, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    p = load_product(db, pid, user)
     if "name" in body and body["name"]:
         p.name = body["name"].strip()
     if "unit" in body:
@@ -645,24 +648,33 @@ def _user_dict(u: CoUser) -> dict:
 
 
 @router.get("/users")
-def list_users(db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    return [_user_dict(u) for u in db.query(CoUser).order_by(CoUser.name).all()]
+def list_users(db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    return [_user_dict(u) for u in db.query(CoUser).filter(
+        CoUser.tenant_id == user.tenant_id
+    ).order_by(CoUser.name).all()]
 
 
 @router.post("/users", status_code=201)
-def create_user(body: UserIn, db: Session = Depends(get_db), _=Depends(require_co_admin)):
+def create_user(body: UserIn, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
     if body.role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="role: admin | user")
-    if db.query(CoUser).filter(CoUser.email == body.email.strip().lower()).first():
+    if db.query(CoUser).filter(
+        CoUser.tenant_id == user.tenant_id,
+        CoUser.email == body.email.strip().lower(),
+    ).first():
         raise HTTPException(status_code=400, detail="Email уже занят")
     u = CoUser(
+        tenant_id=user.tenant_id,
         email=body.email.strip().lower(),
         name=body.name.strip(),
         password_hash=hash_password(body.password),
         role=body.role,
     )
     if body.restaurant_ids:
-        u.restaurants = db.query(CoRestaurant).filter(CoRestaurant.id.in_(body.restaurant_ids)).all()
+        u.restaurants = db.query(CoRestaurant).filter(
+            CoRestaurant.tenant_id == user.tenant_id,
+            CoRestaurant.id.in_(body.restaurant_ids),
+        ).all()
     db.add(u)
     db.commit()
     db.refresh(u)
@@ -670,8 +682,11 @@ def create_user(body: UserIn, db: Session = Depends(get_db), _=Depends(require_c
 
 
 @router.patch("/users/{uid}")
-def update_user(uid: int, body: UserUpdate, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    u = db.query(CoUser).filter(CoUser.id == uid).first()
+def update_user(uid: int, body: UserUpdate, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    u = db.query(CoUser).filter(
+        CoUser.id == uid,
+        CoUser.tenant_id == user.tenant_id,
+    ).first()
     if not u:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     if body.name is not None:
@@ -685,14 +700,20 @@ def update_user(uid: int, body: UserUpdate, db: Session = Depends(get_db), _=Dep
     if body.is_active is not None:
         u.is_active = body.is_active
     if body.restaurant_ids is not None:
-        u.restaurants = db.query(CoRestaurant).filter(CoRestaurant.id.in_(body.restaurant_ids)).all()
+        u.restaurants = db.query(CoRestaurant).filter(
+            CoRestaurant.tenant_id == user.tenant_id,
+            CoRestaurant.id.in_(body.restaurant_ids),
+        ).all()
     db.commit()
     return _user_dict(u)
 
 
 @router.delete("/users/{uid}", status_code=204)
-def delete_user(uid: int, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    u = db.query(CoUser).filter(CoUser.id == uid).first()
+def delete_user(uid: int, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    u = db.query(CoUser).filter(
+        CoUser.id == uid,
+        CoUser.tenant_id == user.tenant_id,
+    ).first()
     if not u:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     db.delete(u)
@@ -717,10 +738,18 @@ class MappingUpdate(BaseModel):
     container_id: Optional[int] = None
 
 
-def _mapping_dict(m: CoProductMapping, db: Session) -> dict:
-    product = db.query(CoProduct).filter(CoProduct.id == m.product_id).first() if m.product_id else None
-    supplier = db.query(CoSupplier).filter(CoSupplier.id == m.supplier_id).first()
-    container = db.query(CoProductContainer).filter(CoProductContainer.id == m.container_id).first() if m.container_id else None
+def _mapping_dict(m: CoProductMapping, db: Session, user: _CoUser) -> dict:
+    product = db.query(CoProduct).filter(
+        CoProduct.id == m.product_id, CoProduct.tenant_id == user.tenant_id
+    ).first() if m.product_id else None
+    supplier = db.query(CoSupplier).filter(
+        CoSupplier.id == m.supplier_id, CoSupplier.tenant_id == user.tenant_id
+    ).first()
+    container = db.query(CoProductContainer).join(
+        CoProduct, CoProductContainer.product_id == CoProduct.id
+    ).filter(
+        CoProductContainer.id == m.container_id, CoProduct.tenant_id == user.tenant_id
+    ).first() if m.container_id else None
     return {
         "id": m.id,
         "supplier_id": m.supplier_id,
@@ -741,20 +770,21 @@ def _mapping_dict(m: CoProductMapping, db: Session) -> dict:
 def list_mappings(
     supplier_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    _=Depends(get_current_co_user),
+    user: _CoUser = Depends(get_current_co_user),
 ):
-    q = db.query(CoProductMapping)
+    q = db.query(CoProductMapping).join(
+        CoSupplier, CoProductMapping.supplier_id == CoSupplier.id
+    ).filter(CoSupplier.tenant_id == user.tenant_id)
     if supplier_id:
         q = q.filter(CoProductMapping.supplier_id == supplier_id)
-    return [_mapping_dict(m, db) for m in q.order_by(CoProductMapping.supplier_product_name).all()]
+    return [_mapping_dict(m, db, user) for m in q.order_by(CoProductMapping.supplier_product_name).all()]
 
 
 @router.post("/mappings", status_code=201)
-def create_mapping(body: MappingIn, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    if not db.query(CoSupplier).filter(CoSupplier.id == body.supplier_id).first():
-        raise HTTPException(status_code=404, detail="Поставщик не найден")
-    if body.product_id and not db.query(CoProduct).filter(CoProduct.id == body.product_id).first():
-        raise HTTPException(status_code=404, detail="Товар не найден")
+def create_mapping(body: MappingIn, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    load_supplier(db, body.supplier_id, user)
+    if body.product_id:
+        load_product(db, body.product_id, user)
     m = CoProductMapping(
         supplier_id=body.supplier_id,
         product_id=body.product_id,
@@ -797,17 +827,14 @@ def create_mapping(body: MappingIn, db: Session = Depends(get_db), _=Depends(get
 
     db.commit()
     db.refresh(m)
-    return _mapping_dict(m, db)
+    return _mapping_dict(m, db, user)
 
 
 @router.patch("/mappings/{mid}")
-def update_mapping(mid: int, body: MappingUpdate, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    m = db.query(CoProductMapping).filter(CoProductMapping.id == mid).first()
-    if not m:
-        raise HTTPException(status_code=404, detail="Маппинг не найден")
+def update_mapping(mid: int, body: MappingUpdate, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    m = load_mapping(db, mid, user)
     if body.supplier_id is not None:
-        if not db.query(CoSupplier).filter(CoSupplier.id == body.supplier_id).first():
-            raise HTTPException(status_code=404, detail="Поставщик не найден")
+        load_supplier(db, body.supplier_id, user)
         m.supplier_id = body.supplier_id
     if body.supplier_product_name is not None:
         m.supplier_product_name = body.supplier_product_name.strip()
@@ -816,18 +843,16 @@ def update_mapping(mid: int, body: MappingUpdate, db: Session = Depends(get_db),
     if "container_id" in body.model_fields_set:
         m.container_id = body.container_id
     if "product_id" in body.model_fields_set:
-        if body.product_id and not db.query(CoProduct).filter(CoProduct.id == body.product_id).first():
-            raise HTTPException(status_code=404, detail="Товар не найден")
+        if body.product_id:
+            load_product(db, body.product_id, user)
         m.product_id = body.product_id
     db.commit()
-    return _mapping_dict(m, db)
+    return _mapping_dict(m, db, user)
 
 
 @router.delete("/mappings/{mid}", status_code=204)
-def delete_mapping(mid: int, db: Session = Depends(get_db), _=Depends(get_current_co_user)):
-    m = db.query(CoProductMapping).filter(CoProductMapping.id == mid).first()
-    if not m:
-        raise HTTPException(status_code=404, detail="Маппинг не найден")
+def delete_mapping(mid: int, db: Session = Depends(get_db), user: _CoUser = Depends(get_current_co_user)):
+    m = load_mapping(db, mid, user)
     db.delete(m)
     db.commit()
 
@@ -862,18 +887,19 @@ def _container_dict(c: CoProductContainer) -> dict:
 def list_containers(
     product_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    _=Depends(get_current_co_user),
+    user: _CoUser = Depends(get_current_co_user),
 ):
-    q = db.query(CoProductContainer)
+    q = db.query(CoProductContainer).join(
+        CoProduct, CoProductContainer.product_id == CoProduct.id
+    ).filter(CoProduct.tenant_id == user.tenant_id)
     if product_id:
         q = q.filter(CoProductContainer.product_id == product_id)
     return [_container_dict(c) for c in q.order_by(CoProductContainer.product_id).all()]
 
 
 @router.post("/containers", status_code=201)
-def create_container(body: ContainerIn, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    if not db.query(CoProduct).filter(CoProduct.id == body.product_id).first():
-        raise HTTPException(status_code=404, detail="Товар не найден")
+def create_container(body: ContainerIn, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    load_product(db, body.product_id, user)
     c = CoProductContainer(
         product_id=body.product_id,
         iiko_container_id=body.iiko_container_id.strip(),
@@ -887,10 +913,8 @@ def create_container(body: ContainerIn, db: Session = Depends(get_db), _=Depends
 
 
 @router.patch("/containers/{cid}")
-def update_container(cid: int, body: ContainerUpdate, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    c = db.query(CoProductContainer).filter(CoProductContainer.id == cid).first()
-    if not c:
-        raise HTTPException(status_code=404, detail="Контейнер не найден")
+def update_container(cid: int, body: ContainerUpdate, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    c = load_container(db, cid, user)
     if body.iiko_container_id is not None:
         c.iiko_container_id = body.iiko_container_id.strip()
     if body.name is not None:
@@ -902,9 +926,7 @@ def update_container(cid: int, body: ContainerUpdate, db: Session = Depends(get_
 
 
 @router.delete("/containers/{cid}", status_code=204)
-def delete_container(cid: int, db: Session = Depends(get_db), _=Depends(require_co_admin)):
-    c = db.query(CoProductContainer).filter(CoProductContainer.id == cid).first()
-    if not c:
-        raise HTTPException(status_code=404, detail="Контейнер не найден")
+def delete_container(cid: int, db: Session = Depends(get_db), user: _CoUser = Depends(require_co_admin)):
+    c = load_container(db, cid, user)
     db.delete(c)
     db.commit()

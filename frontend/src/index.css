@@ -12,8 +12,8 @@
     @apply bg-brand-bg text-brand-dark font-sans antialiased;
   }
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
   ::-webkit-scrollbar-track {
     @apply bg-transparent;
@@ -22,13 +22,13 @@
     @apply bg-brand-border rounded-full;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-brand-muted;
+    @apply bg-brand-muted/40;
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-yellow text-brand-dark font-semibold text-sm
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-green text-white font-semibold text-sm
            hover:brightness-95 active:scale-95 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-secondary {
@@ -44,15 +44,24 @@
   }
   .input {
     @apply w-full px-3 py-2 rounded-lg border border-brand-border bg-white text-sm text-brand-dark
-           placeholder-brand-muted outline-none focus:ring-2 focus:ring-brand-yellow/50 focus:border-brand-yellow
+           placeholder-brand-muted outline-none focus:ring-2 focus:ring-brand-green/25 focus:border-brand-green
            transition-all duration-150 disabled:bg-brand-bg disabled:text-brand-muted;
   }
   .input-sm { @apply px-2 py-1 text-xs; }
-  .badge-ok        { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800; }
-  .badge-over      { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800; }
-  .badge-warn      { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800; }
-  .badge-muted     { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600; }
+  .badge-ok     { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200; }
+  .badge-over   { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200; }
+  .badge-warn   { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200; }
+  .badge-muted  { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200; }
+  .badge-blue   { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200; }
   .no-scrollbar    { -ms-overflow-style: none; scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+  /* Sidebar nav active state */
+  .nav-active {
+    @apply bg-white/10 text-white font-semibold border-l-2 border-brand-green;
+  }
+  .nav-inactive {
+    @apply text-white/60 hover:bg-white/5 hover:text-white border-l-2 border-transparent;
+  }
 }

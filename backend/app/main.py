@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.api import co_auth, co_admin, co_invoices, co_writeoffs, co_superadmin
+from app.api import co_auth, co_admin, co_invoices, co_writeoffs, co_superadmin, co_reconciliation
 from app.api.co_google_auth import router as google_auth_router
 from app.api.co_onboarding import router as onboarding_router
 
@@ -49,6 +49,7 @@ app.include_router(co_admin.router)
 app.include_router(co_invoices.router)
 app.include_router(co_writeoffs.router)
 app.include_router(co_superadmin.router)
+app.include_router(co_reconciliation.router)
 app.include_router(google_auth_router)
 app.include_router(onboarding_router)
 

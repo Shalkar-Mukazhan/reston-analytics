@@ -337,3 +337,27 @@ class CoInvoiceItem(Base):
     price = Column(Numeric(12, 2), nullable=False)
 
     invoice = relationship("CoInvoice", back_populates="items")
+
+
+class CoReconciliationAct(Base):
+    __tablename__ = "co_reconciliation_acts"
+    __table_args__ = {"schema": _S}
+
+    id = Column(Integer, primary_key=True)
+    restaurant_id = Column(Integer, ForeignKey(f"{_S}.restaurants.id", ondelete="CASCADE"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey(f"{_S}.suppliers.id", ondelete="RESTRICT"), nullable=False)
+    period_from = Column(Date, nullable=False)
+    period_to = Column(Date, nullable=False)
+    credit_total = Column(Numeric(14, 2), nullable=False)
+    debit_total = Column(Numeric(14, 2), nullable=False)
+    iiko_invoices_total = Column(Numeric(14, 2), nullable=False)
+    delta = Column(Numeric(14, 2), nullable=False)
+    verdict = Column(String(20), nullable=False)
+    rows_json = Column(JSON, nullable=True)
+    extra_invoices_json = Column(JSON, nullable=True)
+    source_filename = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey(f"{_S}.users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    restaurant = relationship("CoRestaurant")
+    supplier = relationship("CoSupplier")

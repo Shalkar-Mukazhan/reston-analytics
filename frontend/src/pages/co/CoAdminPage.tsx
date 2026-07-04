@@ -4,8 +4,7 @@ import coApi from '../../api/coClient'
 import CoLayout from './CoLayout'
 import {
   RefreshCw, Plus, Edit2, Trash2, Save, X, Search,
-  Loader2, CheckCircle2, AlertCircle, Warehouse, Package,
-  Truck, Users, Store, ChevronDown, ChevronUp, ArrowLeftRight, Box,
+  Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
 } from 'lucide-react'
 
 const errMsg = (e: any): string => {

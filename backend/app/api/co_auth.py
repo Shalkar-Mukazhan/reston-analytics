@@ -1,5 +1,5 @@
 """Auth API for coffee_original tenant."""
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -11,7 +11,7 @@ from app.core.security import (
     verify_password, hash_password,
     create_access_token, create_refresh_token, decode_token,
 )
-from app.models.co_models import CoUser, CoTenant, CoIikoConnection
+from app.models.co_models import CoUser, CoTenant, CoIikoConnection, CoSubscription
 
 router = APIRouter(prefix="/api/co/auth", tags=["co-auth"])
 
@@ -44,6 +44,38 @@ def get_current_co_user(token: str = Depends(_oauth2), db: Session = Depends(get
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Токен не соответствует тенанту пользователя",
         )
+
+    tenant = db.query(CoTenant).filter(
+        CoTenant.id == user.tenant_id
+    ).first()
+
+    # Проверка 1: тенант активен
+    if not tenant or not tenant.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account_disabled"
+        )
+
+    # Проверка 2: подписка (только для freelancer тенантов)
+    if tenant.type == "freelancer":
+        subscription = db.query(CoSubscription).filter(
+            CoSubscription.tenant_id == user.tenant_id
+        ).order_by(CoSubscription.id.desc()).first()
+
+        if subscription:
+            if subscription.status == "trial":
+                if (subscription.trial_ends_at and
+                        subscription.trial_ends_at < datetime.now(timezone.utc)):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="trial_expired"
+                    )
+            elif subscription.status not in ("active",):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="subscription_inactive"
+                )
+
     return user
 
 
@@ -101,6 +133,16 @@ def me(
         CoIikoConnection.base_url != ""
     ).first() is not None
 
+    subscription = db.query(CoSubscription).filter(
+        CoSubscription.tenant_id == user.tenant_id
+    ).order_by(CoSubscription.id.desc()).first()
+
+    trial_days_left = None
+    if subscription and subscription.status == "trial":
+        if subscription.trial_ends_at:
+            delta = subscription.trial_ends_at - datetime.now(timezone.utc)
+            trial_days_left = max(0, delta.days)
+
     return {
         "id": user.id,
         "email": user.email,
@@ -112,6 +154,9 @@ def me(
         "onboarding_complete": tenant.onboarding_complete if tenant else False,
         "iiko_connected": iiko_connected,
         "restaurant_ids": [r.id for r in user.restaurants],
+        "subscription_status": subscription.status if subscription else None,
+        "subscription_plan": subscription.plan if subscription else None,
+        "trial_days_left": trial_days_left,
     }
 
 

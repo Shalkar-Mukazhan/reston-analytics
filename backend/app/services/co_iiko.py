@@ -1,6 +1,7 @@
 """iiko API helpers for Coffee Original restaurants."""
 import time
 import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from app.models.co_models import CoRestaurant
 
@@ -40,6 +41,41 @@ def fetch_olap(restaurant: CoRestaurant, preset_id: str, date_from: str, date_to
     if isinstance(data, dict):
         return data.get("data", []) or data.get("items", []) or []
     return data if isinstance(data, list) else []
+
+
+def fetch_incoming_invoices(
+    restaurant: CoRestaurant, supplier_iiko_id: str, date_from: str, date_to: str,
+) -> list[dict]:
+    """Выгрузка приходных накладных поставщика напрямую из iiko (без OLAP).
+
+    GET /resto/api/documents/export/incomingInvoice?supplierId=...
+    Возвращает по каждому документу: iiko id, внутренний и внешний номер,
+    дату оприходования и сумму (Σ item.sum).
+    """
+    key = _get_key(restaurant.base_url, restaurant.iiko_login, restaurant.iiko_password_hash)
+    url = f"{restaurant.base_url}/resto/api/documents/export/incomingInvoice"
+    params = {"key": key, "from": date_from, "to": date_to, "supplierId": supplier_iiko_id}
+    r = requests.get(url, params=params, timeout=60)
+    if r.status_code in (401, 403):
+        params["key"] = _get_key(restaurant.base_url, restaurant.iiko_login, restaurant.iiko_password_hash)
+        r = requests.get(url, params=params, timeout=60)
+    r.raise_for_status()
+
+    root = ET.fromstring(r.text)
+    result = []
+    for doc in root.findall("document"):
+        items = doc.findall("items/item")
+        total = sum(float(i.findtext("sum") or 0) for i in items)
+        date_raw = doc.findtext("incomingDate") or ""
+        result.append({
+            "iiko_id": doc.findtext("id"),
+            "document_number": doc.findtext("documentNumber"),
+            "incoming_document_number": doc.findtext("incomingDocumentNumber"),
+            "date": date_raw[:10] or None,
+            "total": round(total, 2),
+            "status": doc.findtext("status"),
+        })
+    return result
 
 
 def post_writeoff(restaurant: CoRestaurant, payload: dict) -> dict:

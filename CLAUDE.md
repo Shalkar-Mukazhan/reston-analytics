@@ -1,8 +1,8 @@
 # CLAUDE.md — RestOn / Coffee Original
 
-Состояние на 2026-06-29. Проект обслуживает одного клиента — **Coffee Original (CO)**.
+Состояние на 2026-07-04. Проект обслуживает одного клиента — **Coffee Original (CO)**.
 Старый код «Reston» вырезан рефакторингом (см. git `be89c9a`), осталась только CO-логика.
-Идёт перевод на **мультитенантность (SaaS)** — см. раздел ниже. Alembic head: `0055`.
+Идёт перевод на **мультитенантность (SaaS)** — см. раздел ниже. Alembic head: `0058`.
 
 ---
 
@@ -60,14 +60,68 @@ nginx проксирует `backend:8000` и `frontend:5173`.
   `require_co_or_admin` (ссылались на несуществующий `app.models.user`). Живая авторизация —
   `get_current_co_user`/`require_co_admin` в `app/api/co_auth.py`.
 
+## ✅ Сделано (2026-07-04) — Акт сверки
+
+Новая фича: сверка присланного поставщиком акта сверки взаиморасчётов (xls/xlsx/pdf)
+с приходными накладными **напрямую из iiko** (без OLAP, без OCR/LLM — детерминированный
+разбор файла). Мотивация: `co_invoices` (наша БД) отражает только то, что прогнали через
+OCR в RestOn, а бухгалтеры часто вводят накладные прямо в iikoOffice — сверка с живым iiko
+надёжнее.
+
+- **`backend/app/services/reconciliation_parser.py`** — парсит xls (`xlrd`)/xlsx (`openpyxl`)/
+  pdf (`pdfplumber`, `extract_tables()`). Формат акта — стандартная 1С-выгрузка: два зеркальных
+  блока «Дата|Документ|Дебет|Кредит» (наша сторона и сторона поставщика), опознаются по
+  заголовку (`_find_header_columns`), БИН и период — regex по полному тексту.
+- **`backend/app/services/co_iiko.py`** → `fetch_incoming_invoices(restaurant, supplier_iiko_id, date_from, date_to)`
+  — GET `/resto/api/documents/export/incomingInvoice?supplierId=...`, без OLAP.
+- **`backend/app/api/co_reconciliation.py`** (`/api/co/reconciliation/...`):
+  `POST /check` (сверка без сохранения), `POST /save`, `GET /` (список), `GET /{id}`, `DELETE /{id}`.
+- **Таблица `co_reconciliation_acts`** — миграция `0058`, модель `CoReconciliationAct` в `co_models.py`.
+  Тенант — транзитивно через `restaurant_id` (как `CoInvoice`/`CoWriteoffAct`, без своей колонки `tenant_id`).
+- **`frontend/src/pages/co/CoReconciliationPage.tsx`** — маршрут `/reconciliation`, пункт «Акт сверки» в сайдбаре.
+- **requirements.txt** — добавлены `xlrd==2.0.1`, `pdfplumber==0.11.4`.
+
+### Ключевые решения по логике сверки
+
+- **Кто есть кто в акте**: слева всегда поставщик (выставил акт), справа — мы. Определяется
+  по БИН: сначала ищем поставщика по БИН **левой** колонки, и только потом — правой.
+  ⚠️ **Не искать по обоим БИН сразу через `IN(...)`** — был баг: в справочнике поставщиков
+  есть «мусорные» записи с БИН самого ресторана (см. «Известные проблемы данных» ниже),
+  порядок в `IN(...)` непредсказуем и мог выбрать не того поставщика.
+- **Дебет/Кредит с нашей стороны**: Кредит = накладная (наш долг растёт), Дебет = оплата
+  (наш долг падает). Если наша колонка в файле пустая (обычное дело — заполняет только
+  поставщик) — берём цифру с их стороны и переворачиваем Дебет/Кредит.
+- **Период запроса к iiko** — берём по фактическим датам строк акта (± 2 дня допуск), а НЕ
+  по шапке документа целиком: строки обычно начинают позже начала заявленного периода
+  (то, что раньше — уже в сальдо на начало, попадание в OLAP/выгрузку даёт ложные "лишние").
+- **Сопоставление накладных**: по сумме (±1 тенге) и дате (±2 дня — дата реализации у
+  поставщика может отличаться от даты оприходования в iiko на 1 день).
+  🔴 **Баг-ловушка**: `_days_apart(...) or 99` ломается для точного совпадения (diff=0 falsy
+  в Python) — использовать `_dates_close()` с явной проверкой `is not None`.
+- **Номер поставщика vs iiko**: внешний номер поставщика («10668») хранится в
+  `incomingDocumentNumber`, а не в `documentNumber` (это внутренний номер iiko).
+
+### ⚠️ Известные проблемы данных (найдены при тестировании, не исправлены)
+
+- **Задвоение ресторана «Айтеке би»** — `id=20` (code `AYTEKE`) и `id=18` (code `AITEKE BI`)
+  указывают на ОДИН и тот же `base_url` (`coffee-original-ayteke-bi.iiko.it`), оба `is_active=true`.
+- **«Мусорные» поставщики с БИН ресторана** — минимум у CO Alem (БИН `020513600676`) в
+  `suppliers` есть 6 записей-складов («Алем: Алем Бар/Кухня/Кондитерка/Хозка/Штучка/Основной
+  склад») с тем же БИН. Похоже на `INTERNAL_SUPPLIER` (внутренний поставщик в iiko —
+  служебный контрагент для межскладских перемещений), случайно попавший в справочник при
+  синхронизации поставщиков в `co_admin.py`. Требует решения при работе над `co_admin.py`.
+- **Ресторан «СО KUNAEVA»** — есть присланный акт сверки от него, но такого ресторана нет
+  в `restaurants` вообще — нужно завести, если сверка по нему тоже нужна.
+
 ---
 
 ## 🔲 Осталось
 
 - **A4 — чистка `requirements.txt`** (отдельная задача с пересборкой 3 образов):
-  удалить `gspread`, `google-auth`, `reportlab`, `tenacity`, `openpyxl` (0 импортов).
-  🔴 `httpx` НЕ трогать — нужен `anthropic`. Заодно убрать осиротевшие импорты в `security.py`
-  (`Depends`, `Session`, `get_db`, `OAuth2PasswordBearer`, `oauth2_scheme`).
+  удалить `gspread`, `google-auth`, `reportlab`, `tenacity` (0 импортов).
+  ⚠️ `openpyxl` теперь ИСПОЛЬЗУЕТСЯ (`reconciliation_parser.py`, парсинг xlsx) — из списка на
+  удаление убрать. 🔴 `httpx` НЕ трогать — нужен `anthropic`. Заодно убрать осиротевшие
+  импорты в `security.py` (`Depends`, `Session`, `get_db`, `OAuth2PasswordBearer`, `oauth2_scheme`).
 - **Пустой контейнер `postgres`** — убрать. Но у `backend` и `celery` в prod-файле
   `depends_on: postgres: service_healthy` (гейт старта) → сперва снять depends_on, потом
   точечно `stop/rm`. Освободит volume ~47 MB.
@@ -92,9 +146,13 @@ nginx проксирует `backend:8000` и `frontend:5173`.
 - ✅ `tenant_utils.py` — общий helper `load_restaurant` (используют co_invoices + co_writeoffs)
 - ✅ `co_invoices.py` — полностью изолирован по `tenant_id`
 - ✅ `co_writeoffs.py` — полностью изолирован по `tenant_id` (под-шаги А+Б+В)
+- ✅ Суперадмин-роутер — `api/co_superadmin.py`, `/api/superadmin/tenants` (create/list/patch),
+  защита через заголовок `X-Superadmin-Secret` (env `SUPERADMIN_SECRET`, настроен на проде).
+  Проверено вживую 2026-07-04 — работает, в базе уже 3 тенанта (Coffee Original + 2 self-serve
+  freelancer/trial). **Фронтенд-страницы нет** — только прямые запросы к API.
+- ✅ Регистрация + онбординг — Google OAuth + onboarding flow (см. коммит), уже есть live-тенанты
+  через самостоятельную регистрацию.
 - ⬜ `co_admin.py` — следующий (разведка → правки по под-шагам)
-- ⬜ Суперадмин-роутер
-- ⬜ Регистрация + онбординг
 - ⬜ Биллинг
 
 ### Ключевые решения по мультитенантности
@@ -180,6 +238,10 @@ nginx проксирует `backend:8000` и `frontend:5173`.
 - `api/co_admin.py` — `/api/co/admin/...` (CRUD + iiko sync)
 - `api/co_invoices.py` — `/api/co/invoices/...` (OCR накладные)
 - `api/co_writeoffs.py` — акты списания
+- `api/co_superadmin.py` — `/api/superadmin/...` (управление тенантами, без UI)
+- `api/co_reconciliation.py` — `/api/co/reconciliation/...` (акт сверки, см. раздел выше)
+- `services/co_iiko.py` — iiko API хелперы (`fetch_olap`, `fetch_incoming_invoices`, `post_writeoff`)
+- `services/reconciliation_parser.py` — детерминированный парсер актов сверки (xls/xlsx/pdf)
 - `core/security.py`, `core/database.py`, `core/config.py`
 - `alembic/` — миграции (version_table в схеме `coffee_original`)
 
@@ -190,6 +252,7 @@ nginx проксирует `backend:8000` и `frontend:5173`.
 - `pages/co/CoAdminPage.tsx` — CRUD: рестораны, склады, товары, поставщики, маппинг, пользователи
 - `pages/co/CoInvoicesPage.tsx` — загрузка и обработка накладных (OCR)
 - `pages/co/CoWriteoffPage.tsx` — акты списания
+- `pages/co/CoReconciliationPage.tsx` — акт сверки (загрузка файла, сверка с iiko, история)
 - `api/coClient.ts` — axios клиент для `/api/co/...`
 
 **Маршруты frontend:**
@@ -197,6 +260,7 @@ nginx проксирует `backend:8000` и `frontend:5173`.
 - `/dashboard` → CoDashboardPage (admin после логина)
 - `/invoices` → CoInvoicesPage (user после логина)
 - `/writeoffs` → CoWriteoffPage
+- `/reconciliation` → CoReconciliationPage (акт сверки)
 - `/admin?tab=<tab>` → CoAdminPage (tabs: restaurants, warehouses, products, suppliers, mapping, users, containers)
 
 **Бренд-файлы:**
